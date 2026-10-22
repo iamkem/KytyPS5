@@ -81,6 +81,9 @@ $('shader-update').addEventListener('click',async()=>{
 $('export-hints').addEventListener('click',async()=>{
  try{await window.launcher.save(state);await window.launcher.exportHints();showMessage('Diagnostics export started');}catch(e){showMessage(e.message);}
 });
+$('steam-setup').addEventListener('click',async()=>{
+ try{await window.launcher.setupSteam();}catch(error){showMessage(error.message);}
+});
 $('shader-view-progress').addEventListener('click',()=>window.launcher.showShaderProgress());
 $('cache-update-view').addEventListener('click',()=>window.launcher.showShaderProgress());
 function shaderSummary(s){

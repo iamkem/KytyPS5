@@ -55,6 +55,8 @@
  <div class="path-field"><span>NVIDIA Streamline SDK</span><div class="path-controls"><input id="sdk-path" readonly><button id="browse-sdk">Browse…</button></div></div>
  <div class="field-divider"></div>
  <div class="maintenance"><p>Maintenance</p><button id="shader-update">Update Missing Shaders</button><button id="shader-view-progress">View Progress…</button><button id="logs">Open Logs</button><button id="export-hints">Export Diagnostics</button></div>
+ <div class="field-divider"></div>
+ <div class="maintenance"><p>Steam integration</p><button id="steam-setup">Set Up Steam…</button><p id="steam-hint" class="muted-info">Play as a Non-Steam Game from Steam. The launcher exits with the game; Steamworks Rich Presence is unavailable.</p></div>
  <p class="muted-info">Manage old and current shader caches in the <strong>Shader Cache</strong> tab.</p>
 </div></div></section>
 <section id="tab-mods" class="tab-panel" role="tabpanel">
@@ -65,7 +67,8 @@
   </div>
   <p id="mod-status" class="mods-status">Checking installed mods…</p>
   <div id="mod-list" class="mods-list" role="list"><p class="mods-empty">No mods imported yet.</p></div>
-  <div class="mods-footer"><span id="mod-selected">No mod selected</span><button id="mod-toggle" disabled>Enable</button><button id="mod-remove" disabled>Remove</button><button id="mod-repair" disabled>Repair Incomplete Change…</button></div>
+  <div id="mod-inspection" class="mod-inspection" role="region" aria-label="Mod asset file inspection"><p>Select a mod and Inspect Files to review game-file changes.</p></div>
+  <div class="mods-footer"><span id="mod-selected">No mod selected</span><button id="mod-preview" disabled>Inspect Files</button><button id="mod-toggle" disabled>Enable</button><button id="mod-remove" disabled>Remove</button><button id="mod-repair" disabled>Repair Incomplete Change…</button></div>
   <p class="mods-note">Compatible with loose game asset files only. Mods are imported disabled. Enable makes a verified backup of each replaced asset; Disable restores it. Conflicting mods, edits made outside the manager and executables are blocked. Never edits saves or shader cache.</p>
  </div>
 </section>

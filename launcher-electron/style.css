@@ -80,6 +80,13 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 .mod-badge{font-size:9px;color:#766d60;border:1px solid #ccc4b6;background:#f5f3ee;padding:4px 6px;white-space:nowrap}
 .mod-badge.enabled{color:#39714b;border-color:#a1c4a7;background:#eff6f0}
 .mods-empty{font-size:11px;color:#8c867c;padding:16px}
+.mod-inspection{height:122px;flex-shrink:0;overflow:auto;border:1px solid #dedbd5;background:#fcfbf9;padding:7px 10px;font-size:10px;color:#6e665b;line-height:1.4}
+.mod-inspection p{margin:2px 0 6px}
+.mod-inspection strong{font-weight:650}
+.mod-file{display:flex;gap:8px;align-items:baseline;border-top:1px solid #eeebe6;padding:4px 0}
+.mod-file code{font:10px Consolas,monospace;overflow-wrap:anywhere;min-width:0;flex:1}
+.mod-file span{min-width:65px;text-align:right;font-size:9px;font-weight:650}
+.mod-file[data-state=conflict],.mod-file[data-state=invalid]{color:#b35443}
 .mods-footer{display:flex;align-items:center;gap:7px}
 .mods-footer span{flex:1;font-size:10px;color:#777;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mods-note{font-size:10px;color:#807970;line-height:1.5;margin:0}

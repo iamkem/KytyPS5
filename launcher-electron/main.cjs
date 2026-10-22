@@ -1,5 +1,5 @@
 'use strict';
-const {app,BrowserWindow,ipcMain,dialog,screen,net,protocol,shell} = require('electron');
+const {app,BrowserWindow,ipcMain,dialog,screen,net,protocol,shell,clipboard} = require('electron');
 const {pathToFileURL} = require('node:url');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -11,6 +11,8 @@ const {ShaderProgress}=require('./shader-progress.cjs');
 const shaderInputs=require('./shader-inputs.cjs');
 const {ModManager}=require('./mod-manager.cjs');
 const {DiscordPresence,isConfigured,validConfig,readGamePid}=require('./discord-presence.cjs');
+const {isSteamGameMode,steamShortcut}=require('./steam-integration.cjs');
+const steamGameMode=isSteamGameMode(process.argv);
 protocol.registerSchemesAsPrivileged([{scheme:'kytyart',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}]);
 
 function locateProject(start){
@@ -82,7 +84,7 @@ if (process.argv.includes('--smoke-ui')) {
 }
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width:728,height:458,useContentSize:true,resizable:false,maximizable:false,
+    width:728,height:458,useContentSize:true,resizable:false,maximizable:false,show:!steamGameMode,
     backgroundColor:'#f8f7f4',title:"Demon's Souls",autoHideMenuBar:true,
     icon:path.join(__dirname,'assets','game.ico'),
     webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}
@@ -157,7 +159,7 @@ function startDiscordAgent(settings,gamePid){
     return false;
   }
 }
-function launchCommand(spec,{restore=false,visible=false,onGamePid=null}={}) {
+function launchCommand(spec,{restore=false,visible=false,onGamePid=null,silentError=false}={}) {
   const child=spawn(spec.command,spec.args,{cwd:ROOT,windowsHide:!visible,
     stdio:onGamePid?['ignore','pipe','pipe']:'ignore'});
   if(onGamePid){
@@ -170,7 +172,13 @@ function launchCommand(spec,{restore=false,visible=false,onGamePid=null}={}) {
     });
     child.stderr.on('data',()=>{});
   }
-  child.on('error',err=>{gameProcess=null;resumeIdlePresence();discordLog('GAME_START_ERROR',err.message);mainWindow?.show();mainWindow?.webContents.send('launcher:game-exit');dialog.showErrorBox('Unable to start KytyPS5',err.message);});
+  child.on('error',err=>{
+    gameProcess=null;discordLog('GAME_START_ERROR',err.message);
+    if(!silentError){
+      resumeIdlePresence();mainWindow?.show();mainWindow?.webContents.send('launcher:game-exit');
+      dialog.showErrorBox('Unable to start KytyPS5',err.message);
+    }
+  });
   child.on('exit',()=>{if (restore&&mainWindow) {mainWindow.show();mainWindow.focus();mainWindow.webContents.send('launcher:game-exit');}});
   child.unref();
   return child;
@@ -191,26 +199,49 @@ app.whenReady().then(()=>{
   ipcMain.handle('launcher:save',(_event,data)=>logic.saveSettings(ROOT,data));
   ipcMain.handle('launcher:options',()=>{openOptions();return true;});
   ipcMain.handle('launcher:close-options',(_event,commit=false)=>{optionsCommitted=Boolean(commit);optionsWindow?.close();return true;});
-  ipcMain.handle('launcher:play',(_event,data)=>{
+  const startGame=(data,{steam=false}={})=>{
     if(cacheBusy||modBusy)throw Error('File management is in progress. Finish it before launching the game.');
     if(mods.status(logic.clean(data).game).needsRepair)throw Error('Repair unfinished mod changes before starting the game.');
     if(['running','stopping'].includes(shaderProgress.snapshot().status))throw Error('Shader update is still running. Finish it before playing.');
     const cfg=logic.clean(data);
     const spec=logic.buildPlayArgs(ROOT,cfg);
-    logic.saveSettings(ROOT,cfg);
+    if(!steam)logic.saveSettings(ROOT,cfg); // Steam auto-launch is read-only for user settings.
     if (gameProcess) throw Error('KytyPS5 is already running.');
     stopIdlePresence();
-    gameProcess=launchCommand(spec,{restore:true,onGamePid:isConfigured(cfg)?pid=>{
+    const child=launchCommand(spec,{restore:!steam,silentError:steam,onGamePid:isConfigured(cfg)?pid=>{
       discordLog('GAME_PID_DETECTED',String(pid));
       startDiscordAgent(cfg,pid);
     }:null});
-    gameProcess.on('exit',()=>{
-      gameProcess=null;
-      discordLog('GAME_EXIT','Restoring launcher activity after helper cleanup');
-      resumeIdlePresence();
+    gameProcess=child;
+    child.on('exit',()=>{
+      if(gameProcess===child)gameProcess=null;
+      discordLog('GAME_EXIT',steam?'Ending Steam-launched game session':'Restoring launcher activity after helper cleanup');
+      if(steam)app.quit();else resumeIdlePresence();
     });
+    if(steam)child.on('error',()=>{app.quit();});
     mainWindow?.hide();
     return true;
+  };
+  ipcMain.handle('launcher:play',(_event,data)=>{
+    if(steamGameMode)throw Error('Steam session owns game launch');
+    return startGame(data);
+  });
+  ipcMain.handle('launcher:steam-setup',async()=>{
+    if(!optionsWindow||optionsWindow.isDestroyed())throw Error('Open Options before configuring Steam.');
+    const shortcut=steamShortcut(ROOT);
+    if(!shortcut.available)throw Error('Packaged launcher not found. Build the Electron launcher first.');
+    const result=await dialog.showMessageBox(optionsWindow,{
+      type:'info',title:'Steam Non-Steam Game setup',
+      message:'Add KytyPS5 to your Steam Library',
+      detail:'Steam → Games → Add a Non-Steam Game to My Library → Browse to the EXE below.\n'+
+        'Rename the shortcut to: '+shortcut.name+'\n\nTarget: '+shortcut.target+
+        '\nStart In: '+shortcut.startIn+'\nLaunch Options: '+shortcut.launchOptions+
+        '\n\nLaunch from Steam (not launcher.cmd). The game auto-starts and the helper exits when gameplay ends. Steam status is limited to Non-Steam Game; no Steamworks Rich Presence or guaranteed Overlay.',
+      buttons:['Close','Copy EXE Path','Copy Launch Options'],defaultId:0,cancelId:0,noLink:true
+    });
+    if(result.response===1)clipboard.writeText(shortcut.target);
+    if(result.response===2)clipboard.writeText(shortcut.launchOptions);
+    return {copied:result.response===1?'target':result.response===2?'launchOptions':null};
   });
   ipcMain.handle('launcher:choose-game',async(event)=>{
     const parent=BrowserWindow.fromWebContents(event.sender);
@@ -274,6 +305,12 @@ app.whenReady().then(()=>{
     if(mods.status(currentSettings().game).gameChanged)throw Error('The registered mods belong to another game path.');
   };
   ipcMain.handle('launcher:mods-list',()=>mods.status(currentSettings().game));
+  ipcMain.handle('launcher:mods-inspect',(_event,id)=>{
+    if(!optionsWindow||optionsWindow.isDestroyed())throw Error('Open Mods Manager first.');
+    if(typeof id!=='string'||!/^[a-f0-9-]{36}$/i.test(id))throw Error('Invalid mod ID');
+    modIdle();
+    return mods.inspect(id,currentSettings().game);
+  });
   const importMod=async type=>{
     if(!optionsWindow||optionsWindow.isDestroyed())throw Error('Open Mods Manager first.');
     modIdle();
@@ -298,11 +335,24 @@ app.whenReady().then(()=>{
     const status=mods.status(currentSettings().game);
     const item=status.mods.find(m=>m.id===id);
     if(!item)throw Error('Mod not found; refresh');
+    const inspection=mods.inspect(id,currentSettings().game);
+    if(!inspection.ready){
+      const problem=inspection.files.find(f=>f.state==='invalid'||f.state==='conflict');
+      throw Error('Mod preflight blocked: '+problem?.rel+' — '+problem?.detail);
+    }
+    const counts=inspection.summary;
+    const impact=inspection.enabled?
+      counts.restore+' original(s) to restore; '+counts.remove+' mod-added file(s) to remove.':
+      counts.replace+' replacement(s); '+counts.add+' new file(s); '+counts.identical+' identical file(s).';
+    const examples=inspection.files.filter(f=>f.state!=='identical').slice(0,8)
+      .map(f=>'['+f.state.toUpperCase()+'] '+f.rel).join('\n');
     const response=await dialog.showMessageBox(optionsWindow,{
       type:enabled?'warning':'question',title:enabled?'Enable asset mod?':'Restore original assets?',
       message:(enabled?'Enable ':'Disable ')+item.name+'?',
-      detail:enabled?'The manager will back up every original file before replacing it. Conflicts with other enabled mods are blocked. Game files must not be modified outside this manager until you disable the mod.':
-        'Original asset files will be restored only if no external edits were made. Files added by this mod will be removed.',
+      detail:impact+'\n\n'+examples+(inspection.files.length>8?'\n… see Inspect Files for full inventory.':'')+
+        '\n\nSHA-256 preflight passed. Game/runtime compatibility is NOT verified. '+
+        (enabled?'Originals will be backed up; avoid external edits until disabled.':
+          'Restoration is blocked if any file was modified externally.'),
       buttons:['Cancel',enabled?'Enable Mod':'Disable Mod'],defaultId:0,cancelId:0,noLink:true
     });
     if(response.response!==1)return {cancelled:true};
@@ -436,7 +486,18 @@ app.whenReady().then(()=>{
   });
   ipcMain.handle('launcher:quit',()=>{app.quit();return true;});
   createWindow();
-  startIdlePresence();
+  if(steamGameMode){
+    // Steam tracks this top-level EXE while the -Follow PowerShell session runs.
+    // Do not show the idle launcher or change launcher-settings.json.
+    try{
+      startGame(currentSettings(),{steam:true});
+      console.log('STEAM_NON_STEAM_GAME_SESSION_STARTED');
+    }catch(error){
+      console.error('STEAM_GAME_LAUNCH_FAILED '+error.message);
+      dialog.showErrorBox('Steam launch unavailable',error.message);
+      app.quit();
+    }
+  }else startIdlePresence();
   if (process.argv.includes('--smoke-ui')) {
     // GUI integration test: render both native Electron windows and capture review images.
     (async()=>{
@@ -468,6 +529,14 @@ app.whenReady().then(()=>{
         if(Object.values(discordHidden).some(value=>!value))
           throw Error('Discord JSON-only controls leaked into the Settings UI: '+JSON.stringify(discordHidden));
         console.log('ELECTRON_DISCORD_JSON_ONLY_PASS '+JSON.stringify(discordHidden));
+        await optionsWindow.webContents.executeJavaScript("document.querySelector('[data-tab=advanced]').click()");
+        const steamUi=await optionsWindow.webContents.executeJavaScript(
+          "({setup:!!document.querySelector('#steam-setup'),bridge:typeof window.launcher.setupSteam==='function',"+
+          "mode:document.querySelector('#steam-hint').textContent.includes('Non-Steam'),"+
+          "visible:(()=>{const b=document.querySelector('#steam-setup').getBoundingClientRect();"+
+          "const p=document.querySelector('#tab-advanced').getBoundingClientRect();return b.height>0&&b.top>=p.top&&b.bottom<=p.bottom;})()})");
+        if(Object.values(steamUi).some(v=>!v))throw Error('Steam setup UI smoke failed: '+JSON.stringify(steamUi));
+        console.log('ELECTRON_STEAM_SETUP_UI_PASS '+JSON.stringify(steamUi));
         try { fs.writeFileSync(path.join(reviewDir,'review-options.png'),(await optionsWindow.webContents.capturePage()).toPNG()); }
         catch(e){console.warn('SCREENSHOT_UNAVAILABLE options: '+e.message);}
         // Review the Graphics and Shader Cache screens, not only the default Display tab.
@@ -476,9 +545,20 @@ app.whenReady().then(()=>{
         fs.writeFileSync(path.join(reviewDir,'review-graphics.png'),(await optionsWindow.webContents.capturePage()).toPNG());
         await optionsWindow.webContents.executeJavaScript("document.querySelector('[data-tab=mods]').click()");
         const modUi=await optionsWindow.webContents.executeJavaScript(
-          "({panel:document.querySelector('#tab-mods').classList.contains('active'),folder:!!document.querySelector('#mod-import-folder'),zip:!!document.querySelector('#mod-import-zip'),list:!!document.querySelector('#mod-list'),toggleDisabled:document.querySelector('#mod-toggle').disabled,repairDisabled:document.querySelector('#mod-repair').disabled})");
+          "({panel:document.querySelector('#tab-mods').classList.contains('active'),folder:!!document.querySelector('#mod-import-folder'),zip:!!document.querySelector('#mod-import-zip'),list:!!document.querySelector('#mod-list'),inspection:!!document.querySelector('#mod-inspection'),inspectBridge:typeof window.launcher.inspectMod==='function',previewDisabled:document.querySelector('#mod-preview').disabled,toggleDisabled:document.querySelector('#mod-toggle').disabled,repairDisabled:document.querySelector('#mod-repair').disabled})");
         if(Object.values(modUi).some(x=>!x))throw Error('Mods Manager GUI smoke failed: '+JSON.stringify(modUi));
         console.log('ELECTRON_MODS_UI_PASS '+JSON.stringify(modUi));
+        const inspectionUi=await optionsWindow.webContents.executeJavaScript(
+          "(async()=>{const row=document.querySelector('.mod-item');if(!row)return {skipped:true};"+
+          "row.click();document.querySelector('#mod-preview').click();"+
+          "for(let i=0;i<60;i++){if(document.querySelector('.mod-file'))break;await new Promise(r=>setTimeout(r,100));}"+
+          "return {selected:!!document.querySelector('.mod-item.selected'),files:document.querySelectorAll('.mod-file').length,"+
+          "message:document.querySelector('#mod-status').textContent};})()");
+        if(!inspectionUi.skipped&&(!inspectionUi.selected||inspectionUi.files===0||
+           !inspectionUi.message.includes('Read-only inspection passed')))
+          throw Error('Mods Inspect Files UI failed: '+JSON.stringify(inspectionUi));
+        console.log('ELECTRON_MODS_INSPECT_PASS '+JSON.stringify(inspectionUi));
+        fs.writeFileSync(path.join(reviewDir,'review-mods.png'),(await optionsWindow.webContents.capturePage()).toPNG());
         await optionsWindow.webContents.executeJavaScript("document.querySelector('[data-tab=cache]').click()");
         await new Promise(resolve=>setTimeout(resolve,450));
         const cacheScreen=await optionsWindow.webContents.executeJavaScript(

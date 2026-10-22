@@ -90,6 +90,49 @@ class ModManager{
      appliedCount:Object.keys(data.applied).length,gameChanged:different,needsRepair:fs.existsSync(this.journal),issues:issues.slice(0,12),
      store:this.base};
  }
+ // Explicit, read-only inspection. Import acceptance is not proof of in-game compatibility.
+ // Integrity is verified here for a human-readable preview and again at application time.
+ inspect(id,game){
+   this.assertClear();
+   const target=this.gamePath(game),data=this.load();
+   if(data.game&&path.resolve(data.game).toLowerCase()!==target.toLowerCase())
+     throw Error('Mod collection belongs to another game folder');
+   const mod=data.mods.find(m=>m.id===id);
+   if(!mod)throw Error('Unknown mod');
+   const owned=new Set(Object.keys(data.applied).map(rel=>rel.toLowerCase()));
+   const summary={replace:0,add:0,identical:0,conflict:0,invalid:0,restore:0,remove:0};
+   const files=mod.files.map(f=>{
+     let state,detail='';
+     try{
+       if(normalized(f.rel)!==f.rel)throw Error('Invalid asset path in registry');
+       const source=inside(path.join(this.base,'packages',mod.id),f.rel);
+       if(ensurePlain(source).size!==f.size||shaFile(source)!==f.sha)
+         throw Error('Imported package missing or changed since import');
+       const dest=ensureGamePath(target,f.rel);
+       const present=fs.existsSync(dest),diskHash=present?shaFile(dest):null;
+       if(mod.enabled){
+         const record=data.applied[f.rel];
+         if(!record||record.modId!==mod.id||diskHash!==f.sha)
+           throw Error('Applied asset was modified or is missing');
+         if(record.backup){
+           const original=inside(this.base,record.backup);
+           if(!fs.existsSync(original)||shaFile(original)!==record.originalHash)
+             throw Error('Original backup missing or changed');
+         }
+         state=record.backup?'restore':'remove';
+       }else if(owned.has(f.rel.toLowerCase())){
+         state='conflict';detail='Another enabled mod owns this path';
+       }else if(!present){state='add';}
+       else if(diskHash===f.sha){state='identical';detail='Same SHA-256 as installed asset; no content change';}
+       else{state='replace';}
+     }catch(error){state='invalid';detail=error.message;}
+     summary[state]++;
+     return {rel:f.rel,size:f.size,state,detail};
+   });
+   return {id:mod.id,name:mod.name,enabled:mod.enabled,bytes:mod.bytes,
+     summary,files,ready:summary.conflict===0&&summary.invalid===0,
+     warning:'Only asset paths and SHA-256 were checked. Real game/mod compatibility is unverified.'};
+ }
  async importFolder(source,name,game){
    this.assertClear();const root=this.gamePath(game);
    const data=this.load();if(data.game&&data.game.toLowerCase()!==root.toLowerCase()&&data.mods.length)throw Error('Existing mod library belongs to another game installation; remove those mods before switching game folders');
@@ -223,7 +266,10 @@ class ModManager{
      normalized(c.rel);const dest=ensureGamePath(target,c.rel);
      if(fs.existsSync(dest)){
        const current=shaFile(dest);
-       if(current!==c.previousHash&&current!==c.modHash)throw Error('Unexpected edits prevent automatic recovery: '+c.rel);
+       // Interrupted disable may already have restored the verified original.
+       // Allow that exact expected hash, but never an arbitrary external edit.
+       if(current!==c.previousHash&&current!==c.modHash&&current!==c.expectedHash)
+         throw Error('Unexpected edits prevent automatic recovery: '+c.rel);
      }
      if(c.wasPresent&&(!c.snapshot||!fs.existsSync(c.snapshot)||shaFile(c.snapshot)!==c.previousHash))throw Error('Recovery snapshot missing: '+c.rel);
    }
