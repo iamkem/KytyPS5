@@ -896,6 +896,32 @@ target_include_directories(kyty_emulator PRIVATE ${inc_headers})
 if (WIN32)
 	set(KYTY_STREAMLINE_SDK "${CMAKE_CURRENT_SOURCE_DIR}/_Build/deps/streamline/sdk" CACHE PATH
 	    "NVIDIA Streamline SDK for KYTY_FRAMEGEN (local only)")
+	# The launcher stores the runtime SDK directory outside the checkout. A fresh Windows
+	# build should not silently compile away DLSS/FrameGen when that local SDK has headers.
+	# An explicitly configured, valid -DKYTY_STREAMLINE_SDK always takes precedence.
+	if (NOT EXISTS "${KYTY_STREAMLINE_SDK}/include/sl.h" AND
+	    EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/launcher-settings.json")
+		file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/launcher-settings.json"
+		     _kyty_streamline_lines REGEX "\"streamline\"[ \t]*:")
+		foreach(_kyty_streamline_line IN LISTS _kyty_streamline_lines)
+			string(REGEX MATCH "\"streamline\"[ \t]*:[ \t]*\"([^\"]+)\""
+			       _kyty_streamline_match "${_kyty_streamline_line}")
+			if(CMAKE_MATCH_1)
+				string(REPLACE "\\\\" "/" _kyty_streamline_path "${CMAKE_MATCH_1}")
+				if(EXISTS "${_kyty_streamline_path}/include/sl.h")
+					set(KYTY_STREAMLINE_SDK "${_kyty_streamline_path}" CACHE PATH
+					    "NVIDIA Streamline SDK for KYTY_FRAMEGEN (local only)" FORCE)
+					message(STATUS "NVIDIA Streamline headers found from launcher-settings.json")
+					break()
+				endif()
+			endif()
+		endforeach()
+	endif()
+	if (EXISTS "${KYTY_STREAMLINE_SDK}/include/sl.h")
+		message(STATUS "NVIDIA Streamline enabled (DLSS SR / Frame Generation)")
+	else()
+		message(STATUS "NVIDIA Streamline headers missing: DLSS SR / Frame Generation not compiled")
+	endif()
 	if (EXISTS "${KYTY_STREAMLINE_SDK}/include/sl.h")
 		set_property(SOURCE "${KYTY_SOURCE_DIR}/local/frame-gen.cpp" APPEND PROPERTY
 		             INCLUDE_DIRECTORIES "${KYTY_STREAMLINE_SDK}/include")

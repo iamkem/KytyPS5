@@ -14,10 +14,10 @@ const defaults = Object.freeze({
 });
 // Actual internal render resolution at 16:9. Display resolution is independent.
 const presets = Object.freeze({
-  'Ultra Performance': Object.freeze({render_dlss:900,quality:'lowest',framegen:0,fsr:false,output:'4k',upscaler:'dlss'}),
-  Performance: Object.freeze({render_dlss:1080,quality:'lowest',framegen:0,fsr:false,output:'4k',upscaler:'dlss'}),
-  Balanced: Object.freeze({render_dlss:1152,quality:'low',framegen:0,fsr:false,output:'4k',upscaler:'dlss'}),
-  Quality: Object.freeze({render_dlss:1440,quality:'standard',framegen:0,fsr:false,output:'4k',upscaler:'dlss'})
+  'Ultra Performance': Object.freeze({render_dlss:900,quality:'lowest',fsr:false,output:'4k',upscaler:'dlss'}),
+  Performance: Object.freeze({render_dlss:1080,quality:'lowest',fsr:false,output:'4k',upscaler:'dlss'}),
+  Balanced: Object.freeze({render_dlss:1152,quality:'low',fsr:false,output:'4k',upscaler:'dlss'}),
+  Quality: Object.freeze({render_dlss:1440,quality:'standard',fsr:false,output:'4k',upscaler:'dlss'})
 });
 const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing','discord_presence'];
 const numericKeys = ['language','render','render_dlss','framegen','hud','vram_budget_mb'];

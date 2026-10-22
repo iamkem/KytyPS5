@@ -14,8 +14,11 @@ test('Presets are actual graphics settings and preserve RAM16',()=>{
     assert.equal(next.ram16_backing,true);
     assert.equal(next.ram_diet,true);
     assert.equal(lib.activePreset(next),name);
+    const fg=lib.applyPreset({...base,framegen:2},name);
+    assert.equal(fg.framegen,2,'Selecting '+name+' must not turn off frame generation');
+    assert.equal(lib.activePreset(fg),name);
   }
-  assert.equal(lib.activePreset({...base,upscaler:'dlss',framegen:3}),'Custom');
+  assert.equal(lib.activePreset({...base,upscaler:'dlss',framegen:3}),lib.activePreset({...base,upscaler:'dlss'}));
 });
 test('Settings migrate from PowerShell JSON and round-trip without touching real config',()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'kyty-electron-test-'));
@@ -52,6 +55,19 @@ test('Four resolution-based presets change the actual emulator command',{skip:!l
     assert.match(cmd.command.toLowerCase(),/powershell\.exe$/);
     assert.ok(a.includes('-Follow'));
   }
+});
+test('DLSS-G 2x survives graphics preset and reaches PowerShell as -FrameGen 1',{skip:!localReady},()=>{
+  const cfg=lib.applyPreset({...lib.loadSettings(root),framegen:2},'Performance');
+  const spec=lib.buildPlayArgs(root,cfg);
+  assert.equal(spec.args[spec.args.indexOf('-FrameGen')+1],'1');
+  assert.equal(spec.args[spec.args.indexOf('-Upscaler')+1],'dlss');
+  assert.equal(spec.args[spec.args.indexOf('-RenderHeight')+1],'1080');
+  assert.ok(spec.args.includes('-StreamlineDir'));
+  const result=spawnSync(spec.command,[...spec.args,'-DryRun'],{cwd:root,encoding:'utf8',timeout:40000,windowsHide:true});
+  assert.equal(result.status,0,result.stderr||result.stdout);
+  assert.match(result.stdout,/KYTY_FRAMEGEN=1/);
+  assert.match(result.stdout,/KYTY_UPSCALER=dlss/);
+  assert.match(result.stdout,/KYTY_STREAMLINE_DIR=/);
 });
 test('Missing emulator or missing game does not falsely report success',()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'kyty-noexe-'));

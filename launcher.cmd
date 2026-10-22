@@ -2,12 +2,12 @@
 setlocal
 rem Personal Demon's Souls PC launcher. Backend scripts remain required by Electron.
 set "ROOT=%~dp0"
-if exist "%ROOT%_Build\demons-souls-launcher-v4\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe" (
-  start "" "%ROOT%_Build\demons-souls-launcher-v4\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe"
+if exist "%ROOT%_Build\demons-souls-launcher-v5\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe" (
+  start "" "%ROOT%_Build\demons-souls-launcher-v5\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe"
   exit /b 0
 )
-if exist "%ROOT%_Build\demons-souls-launcher-v3\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe" (
-  start "" "%ROOT%_Build\demons-souls-launcher-v3\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe"
+if exist "%ROOT%_Build\demons-souls-launcher-v4\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe" (
+  start "" "%ROOT%_Build\demons-souls-launcher-v4\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe"
   exit /b 0
 )
 if exist "%ROOT%Launcher\DemonsSoulsLauncher.exe" (

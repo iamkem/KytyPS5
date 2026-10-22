@@ -2,10 +2,10 @@
 let state,runtime,syncing=false,cacheItems=[],inputItems=[];
 const $=id=>document.getElementById(id);
 const presets={
- 'Ultra Performance':{render_dlss:900,quality:'lowest',framegen:0,fsr:false,output:'4k',upscaler:'dlss'},
- Performance:{render_dlss:1080,quality:'lowest',framegen:0,fsr:false,output:'4k',upscaler:'dlss'},
- Balanced:{render_dlss:1152,quality:'low',framegen:0,fsr:false,output:'4k',upscaler:'dlss'},
- Quality:{render_dlss:1440,quality:'standard',framegen:0,fsr:false,output:'4k',upscaler:'dlss'}
+ 'Ultra Performance':{render_dlss:900,quality:'lowest',fsr:false,output:'4k',upscaler:'dlss'},
+ Performance:{render_dlss:1080,quality:'lowest',fsr:false,output:'4k',upscaler:'dlss'},
+ Balanced:{render_dlss:1152,quality:'low',fsr:false,output:'4k',upscaler:'dlss'},
+ Quality:{render_dlss:1440,quality:'standard',fsr:false,output:'4k',upscaler:'dlss'}
 };
 const languages=['Japanese','English (United States)','French (France)','Spanish (Spain)','German','Italian','Dutch','Portuguese (Portugal)','Russian','Korean','Chinese (Traditional)','Chinese (Simplified)','Finnish','Swedish','Danish','Norwegian','Polish','Portuguese (Brazil)','English (United Kingdom)','Turkish','Spanish (Latin America)','Arabic','French (Canada)','Czech','Hungarian','Greek','Romanian','Thai','Vietnamese','Indonesian'];
 const sizes={'16:9':['1280x720','1920x1080','2560x1440','3840x2160'],
