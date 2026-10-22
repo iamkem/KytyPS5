@@ -22,5 +22,11 @@ contextBridge.exposeInMainWorld('launcher', Object.freeze({
   deleteCaches: ids => ipcRenderer.invoke('launcher:cache-delete',ids),
   deleteShaderInputs: ids => ipcRenderer.invoke('launcher:input-delete',ids),
   saveCacheVersion: () => ipcRenderer.invoke('launcher:cache-snapshot'),
-  useCacheVersion: id => ipcRenderer.invoke('launcher:cache-activate',id)
+  useCacheVersion: id => ipcRenderer.invoke('launcher:cache-activate',id),
+  listMods: () => ipcRenderer.invoke('launcher:mods-list'),
+  addModFolder: () => ipcRenderer.invoke('launcher:mods-import-folder'),
+  addModZip: () => ipcRenderer.invoke('launcher:mods-import-zip'),
+  setModEnabled: (id,enabled) => ipcRenderer.invoke('launcher:mods-enable',id,enabled),
+  removeMod: id => ipcRenderer.invoke('launcher:mods-remove',id),
+  repairMods: () => ipcRenderer.invoke('launcher:mods-repair')
 }));

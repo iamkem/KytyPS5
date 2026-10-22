@@ -71,6 +71,7 @@ document.querySelectorAll('.tab-strip button').forEach(button=>button.addEventLi
  }
  for(const panel of document.querySelectorAll('.tab-panel'))panel.classList.toggle('active',panel.id==='tab-'+button.dataset.tab);
  if(button.dataset.tab==='cache')refreshCache();
+ if(button.dataset.tab==='mods')refreshMods();
 }));
 $('browse-game').addEventListener('click',async()=>{const p=await window.launcher.chooseGame();if(p){state.game=p;fill();}});
 $('browse-sdk').addEventListener('click',async()=>{const p=await window.launcher.chooseStreamline();if(p){state.streamline=p;fill();showMessage('Runtime folder selected');}});

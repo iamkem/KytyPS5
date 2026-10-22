@@ -6,6 +6,7 @@
 <button data-tab="display" class="current" role="tab" aria-selected="true">Display</button>
 <button data-tab="graphics" role="tab" aria-selected="false">Graphics</button>
 <button data-tab="advanced" role="tab" aria-selected="false">Advanced</button>
+<button data-tab="mods" role="tab" aria-selected="false">Mods</button>
 <button data-tab="cache" role="tab" aria-selected="false">Shader Cache</button>
 </nav>
 <div class="tab-content">
@@ -47,7 +48,7 @@
  <label class="field"><span>GPU Cache Budget</span><select id="vram"><option value="0">Auto</option><option value="10240">10 GB</option><option value="8192">8 GB</option><option value="6144">6 GB</option><option value="4096">4 GB</option></select></label>
  <label class="field"><span>Compatibility Guard</span><select id="redzone"><option value="true">On</option><option value="false">Off</option></select></label>
  <label class="field"><span>Safe GPU Mode</span><select id="safegpu"><option value="false">Off</option><option value="true">On (slower)</option></select></label>
- <label class="field"><span>Enable Mods</span><input type="checkbox" id="cheats"></label>
+ <label class="field"><span>Enable Cheat Patches</span><input type="checkbox" id="cheats"></label>
  <label class="field"><span>Console Language</span><select id="language"></select></label>
 </div><div class="field-col right-col">
  <div class="path-field"><span>Game Installation</span><div class="path-controls"><input id="game-path" readonly><button id="browse-game">Browse…</button></div></div>
@@ -56,6 +57,18 @@
  <div class="maintenance"><p>Maintenance</p><button id="shader-update">Update Missing Shaders</button><button id="shader-view-progress">View Progress…</button><button id="logs">Open Logs</button><button id="export-hints">Export Diagnostics</button></div>
  <p class="muted-info">Manage old and current shader caches in the <strong>Shader Cache</strong> tab.</p>
 </div></div></section>
+<section id="tab-mods" class="tab-panel" role="tabpanel">
+ <div class="mods-screen">
+  <div class="mods-top">
+   <div><strong>Mod Manager</strong><p>Manage local asset-replacement mods for Demon's Souls</p></div>
+   <div class="mods-buttons"><button id="mod-import-folder">Add Folder…</button><button id="mod-import-zip">Import ZIP…</button><button id="mod-refresh">Refresh</button></div>
+  </div>
+  <p id="mod-status" class="mods-status">Checking installed mods…</p>
+  <div id="mod-list" class="mods-list" role="list"><p class="mods-empty">No mods imported yet.</p></div>
+  <div class="mods-footer"><span id="mod-selected">No mod selected</span><button id="mod-toggle" disabled>Enable</button><button id="mod-remove" disabled>Remove</button><button id="mod-repair" disabled>Repair Incomplete Change…</button></div>
+  <p class="mods-note">Compatible with loose game asset files only. Mods are imported disabled. Enable makes a verified backup of each replaced asset; Disable restores it. Conflicting mods, edits made outside the manager and executables are blocked. Never edits saves or shader cache.</p>
+ </div>
+</section>
 <section id="tab-cache" class="tab-panel" role="tabpanel">
  <div class="cache-screen">
   <div class="cache-top"><div><strong>Shader Cache Versions</strong><p id="cache-status">Checking current GPU/driver cache…</p></div><div class="cache-actions"><button id="cache-snapshot">Save Current Version…</button><button id="cache-refresh">Refresh</button></div></div>
@@ -68,4 +81,4 @@
 </section>
 </div>
 <footer class="options-actions"><button id="reset" class="quiet-button">Reset Graphics</button><div class="spacer"></div><span id="message" role="status"></span><button id="ok" class="primary-button">OK</button><button id="cancel">Cancel</button></footer>
-</div><script src="options.js"></script></body></html>
+</div><script src="options.js"></script><script src="mods-ui.js"></script></body></html>

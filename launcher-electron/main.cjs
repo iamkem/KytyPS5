@@ -9,6 +9,7 @@ const cache = require('./cache.cjs');
 const versions=require('./cache-generations.cjs');
 const {ShaderProgress}=require('./shader-progress.cjs');
 const shaderInputs=require('./shader-inputs.cjs');
+const {ModManager}=require('./mod-manager.cjs');
 const {DiscordPresence,isConfigured,validConfig,readGamePid}=require('./discord-presence.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'kytyart',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}]);
 
@@ -92,6 +93,8 @@ function createWindow() {
   mainWindow.on('closed',()=>{mainWindow=null;if(optionsWindow)optionsWindow.close();});
 }
 const shaderProgress=new ShaderProgress(ROOT);
+const mods=new ModManager(ROOT);
+let modBusy=false;
 function currentSettings(){return logic.loadSettings(ROOT);}
 function openProgressWindow(){
   if(progressWindow&&!progressWindow.isDestroyed()){progressWindow.show();progressWindow.focus();return;}
@@ -189,7 +192,8 @@ app.whenReady().then(()=>{
   ipcMain.handle('launcher:options',()=>{openOptions();return true;});
   ipcMain.handle('launcher:close-options',(_event,commit=false)=>{optionsCommitted=Boolean(commit);optionsWindow?.close();return true;});
   ipcMain.handle('launcher:play',(_event,data)=>{
-    if(cacheBusy)throw Error('Cache backup/switch in progress. Finish it before launching the game.');
+    if(cacheBusy||modBusy)throw Error('File management is in progress. Finish it before launching the game.');
+    if(mods.status(logic.clean(data).game).needsRepair)throw Error('Repair unfinished mod changes before starting the game.');
     if(['running','stopping'].includes(shaderProgress.snapshot().status))throw Error('Shader update is still running. Finish it before playing.');
     const cfg=logic.clean(data);
     const spec=logic.buildPlayArgs(ROOT,cfg);
@@ -253,6 +257,7 @@ app.whenReady().then(()=>{
   });
   let cacheBusy=false;
   const ensureCacheIdle=()=>{
+    if(modBusy)throw Error('A mod operation is running.');
     if(cacheBusy)throw Error('Another cache operation is in progress.');
     if(gameProcess)throw Error('Close the running game before switching shader caches.');
     if(['running','stopping'].includes(shaderProgress.snapshot().status))throw Error('Shader update is running — do not modify shader caches.');
@@ -262,6 +267,77 @@ app.whenReady().then(()=>{
     if(probe.error||probe.status!==0||probe.stdout.trim()!=='0')
       throw Error('Close KytyPS5 and shader precompile before changing cache versions.');
   };
+  // Mods and cache operations share the same idle guard to avoid modifying
+  // assets during game reads or shader compilation.
+  const modIdle=()=>{
+    ensureCacheIdle();
+    if(mods.status(currentSettings().game).gameChanged)throw Error('The registered mods belong to another game path.');
+  };
+  ipcMain.handle('launcher:mods-list',()=>mods.status(currentSettings().game));
+  const importMod=async type=>{
+    if(!optionsWindow||optionsWindow.isDestroyed())throw Error('Open Mods Manager first.');
+    modIdle();
+    const result=await dialog.showOpenDialog(optionsWindow,{
+      title:type==='zip'?'Import a ZIP mod':'Select extracted asset-mod folder',
+      properties:type==='zip'?['openFile']:['openDirectory'],
+      filters:type==='zip'?[{name:'ZIP mods',extensions:['zip']}]:undefined
+    });
+    if(result.canceled||!result.filePaths.length)return {cancelled:true};
+    modIdle();modBusy=true;
+    try{
+      const source=result.filePaths[0],game=currentSettings().game;
+      return type==='zip'?await mods.importZip(source,game):await mods.importFolder(source,path.basename(source),game);
+    }finally{modBusy=false;}
+  };
+  ipcMain.handle('launcher:mods-import-folder',()=>importMod('folder'));
+  ipcMain.handle('launcher:mods-import-zip',()=>importMod('zip'));
+  ipcMain.handle('launcher:mods-enable',async(_event,id,enabled)=>{
+    if(!optionsWindow||optionsWindow.isDestroyed())throw Error('Open Mods Manager first.');
+    if(typeof id!=='string'||!/^[a-f0-9-]{36}$/i.test(id)||typeof enabled!=='boolean')throw Error('Invalid mod action');
+    modIdle();
+    const status=mods.status(currentSettings().game);
+    const item=status.mods.find(m=>m.id===id);
+    if(!item)throw Error('Mod not found; refresh');
+    const response=await dialog.showMessageBox(optionsWindow,{
+      type:enabled?'warning':'question',title:enabled?'Enable asset mod?':'Restore original assets?',
+      message:(enabled?'Enable ':'Disable ')+item.name+'?',
+      detail:enabled?'The manager will back up every original file before replacing it. Conflicts with other enabled mods are blocked. Game files must not be modified outside this manager until you disable the mod.':
+        'Original asset files will be restored only if no external edits were made. Files added by this mod will be removed.',
+      buttons:['Cancel',enabled?'Enable Mod':'Disable Mod'],defaultId:0,cancelId:0,noLink:true
+    });
+    if(response.response!==1)return {cancelled:true};
+    modIdle();modBusy=true;
+    try{return mods.setEnabled(id,enabled,currentSettings().game);}
+    finally{modBusy=false;}
+  });
+  ipcMain.handle('launcher:mods-remove',async(_event,id)=>{
+    if(!optionsWindow||optionsWindow.isDestroyed())throw Error('Open Mods Manager first.');
+    modIdle();
+    const item=mods.status(currentSettings().game).mods.find(m=>m.id===id);
+    if(!item||item.enabled)throw Error('Disable the mod before removing it');
+    const response=await dialog.showMessageBox(optionsWindow,{
+      type:'warning',title:'Remove imported mod?',message:'Remove '+item.name+' from your mod library?',
+      detail:'Deletes only this disabled mod’s managed package in _Mods. The game is unaffected.',
+      buttons:['Cancel','Remove Mod'],defaultId:0,cancelId:0,noLink:true
+    });
+    if(response.response!==1)return {cancelled:true};
+    modIdle();modBusy=true;
+    try{return {removed:mods.remove(id)};}finally{modBusy=false;}
+  });
+  ipcMain.handle('launcher:mods-repair',async()=>{
+    if(!optionsWindow||optionsWindow.isDestroyed())throw Error('Open Mods Manager first.');
+    ensureCacheIdle();
+    if(!mods.status(currentSettings().game).needsRepair)return {repaired:0};
+    const response=await dialog.showMessageBox(optionsWindow,{
+      type:'warning',title:'Repair interrupted mod installation?',
+      message:'Restore the assets from the last interrupted mod operation?',
+      detail:'Checks every target before changing files. Refuses if an external edit is found. Does not touch saves or shaders.',
+      buttons:['Cancel','Repair'],defaultId:0,cancelId:0,noLink:true
+    });
+    if(response.response!==1)return {cancelled:true};
+    ensureCacheIdle();modBusy=true;
+    try{return mods.repair(currentSettings().game);}finally{modBusy=false;}
+  });
   function currentCacheGame(){
     const current=cache.groups(ROOT).find(row=>row.category==='active');
     if(!current)throw Error('No complete active shader cache is available.');
@@ -386,7 +462,7 @@ app.whenReady().then(()=>{
         await new Promise(resolve=>setTimeout(resolve,500));
         const o=await optionsWindow.webContents.executeJavaScript(
           "({tabs:document.querySelectorAll('.tab-strip button').length,cols:document.querySelectorAll('#tab-display .field-col').length,footer:!!document.querySelector('#ok')&&!!document.querySelector('#cancel'),rows:document.querySelectorAll('#tab-display .field').length,uniqueSettings:(()=>{const a=[...document.querySelectorAll('select[id],input[id]')].filter(el=>!['preset','language','game-path','sdk-path'].includes(el.id));return new Set(a.map(el=>el.id)).size===a.length})(),artwork:document.querySelector('.options-banner img').naturalWidth>0,rendered:document.querySelector('#tab-display').getBoundingClientRect().height})");
-        if(o.tabs!==4 || o.cols!==2 || !o.footer || !o.uniqueSettings || !o.artwork || o.rows<6 || o.rendered<300) throw Error('Options screen failed layout checks: '+JSON.stringify(o));
+        if(o.tabs!==5 || o.cols!==2 || !o.footer || !o.uniqueSettings || !o.artwork || o.rows<6 || o.rendered<300) throw Error('Options screen failed layout checks: '+JSON.stringify(o));
         const discordHidden=await optionsWindow.webContents.executeJavaScript(
           "({tab:!document.querySelector('[data-tab=discord]'),panel:!document.querySelector('#tab-discord'),inputs:!document.querySelector('#discord-presence, #discord-app-id, #discord-image, #discord-dev-portal')})");
         if(Object.values(discordHidden).some(value=>!value))
@@ -398,6 +474,11 @@ app.whenReady().then(()=>{
         await optionsWindow.webContents.executeJavaScript("document.querySelector('[data-tab=graphics]').click()");
         await new Promise(resolve=>setTimeout(resolve,250));
         fs.writeFileSync(path.join(reviewDir,'review-graphics.png'),(await optionsWindow.webContents.capturePage()).toPNG());
+        await optionsWindow.webContents.executeJavaScript("document.querySelector('[data-tab=mods]').click()");
+        const modUi=await optionsWindow.webContents.executeJavaScript(
+          "({panel:document.querySelector('#tab-mods').classList.contains('active'),folder:!!document.querySelector('#mod-import-folder'),zip:!!document.querySelector('#mod-import-zip'),list:!!document.querySelector('#mod-list'),toggleDisabled:document.querySelector('#mod-toggle').disabled,repairDisabled:document.querySelector('#mod-repair').disabled})");
+        if(Object.values(modUi).some(x=>!x))throw Error('Mods Manager GUI smoke failed: '+JSON.stringify(modUi));
+        console.log('ELECTRON_MODS_UI_PASS '+JSON.stringify(modUi));
         await optionsWindow.webContents.executeJavaScript("document.querySelector('[data-tab=cache]').click()");
         await new Promise(resolve=>setTimeout(resolve,450));
         const cacheScreen=await optionsWindow.webContents.executeJavaScript(

@@ -66,7 +66,8 @@ test('No Discord tab, form, or settings controls remain in Electron UI',()=>{
   assert.doesNotMatch(js,/(?:discordHint|discordValidated|discord-presence|discord-app-id|discord-dev-portal)/);
   assert.doesNotMatch(preload,/openDiscordDevelopers/);
   assert.equal((html.match(/class="(?:current\s+)?(?:tab-strip)/g)||[]).length,1);
-  assert.equal((html.match(/data-tab="/g)||[]).length,4);
+  assert.equal((html.match(/data-tab="/g)||[]).length,5);
+  assert.match(html,/data-tab="mods"/);
 });
 test('Rich Presence displays KytyPS5 and Demons Souls with session timer',()=>{
   const a=activityForGame(1729600000500,'demons_souls');
