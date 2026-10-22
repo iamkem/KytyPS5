@@ -198,7 +198,6 @@ app.whenReady().then(()=>{
     launchCommand(logic.buildPrecompileArgs(ROOT,currentSettings(),'-ExportHints'),{restore:false,visible:true});
     return true;
   });
-  ipcMain.handle('launcher:discord-developers',()=>shell.openExternal('https://discord.com/developers/applications'));
   ipcMain.handle('launcher:logs',()=>{
     const p=path.join(ROOT,'_Build','run-logs');fs.mkdirSync(p,{recursive:true});shell.openPath(p);
     return true;
@@ -337,12 +336,12 @@ app.whenReady().then(()=>{
         await new Promise(resolve=>setTimeout(resolve,500));
         const o=await optionsWindow.webContents.executeJavaScript(
           "({tabs:document.querySelectorAll('.tab-strip button').length,cols:document.querySelectorAll('#tab-display .field-col').length,footer:!!document.querySelector('#ok')&&!!document.querySelector('#cancel'),rows:document.querySelectorAll('#tab-display .field').length,uniqueSettings:(()=>{const a=[...document.querySelectorAll('select[id],input[id]')].filter(el=>!['preset','language','game-path','sdk-path'].includes(el.id));return new Set(a.map(el=>el.id)).size===a.length})(),artwork:document.querySelector('.options-banner img').naturalWidth>0,rendered:document.querySelector('#tab-display').getBoundingClientRect().height})");
-        if(o.tabs!==5 || o.cols!==2 || !o.footer || !o.uniqueSettings || !o.artwork || o.rows<6 || o.rendered<300) throw Error('Options screen failed layout checks: '+JSON.stringify(o));
-        await optionsWindow.webContents.executeJavaScript("document.querySelector('[data-tab=discord]').click()");
-        const discordUI=await optionsWindow.webContents.executeJavaScript(
-          "({enable:!!document.querySelector('#discord-presence'),appId:!!document.querySelector('#discord-app-id'),asset:!!document.querySelector('#discord-image'),preview:document.querySelector('.discord-preview')?.textContent.includes('Playing Demon'),developer:!!document.querySelector('#discord-dev-portal')})");
-        if(Object.values(discordUI).some(v=>!v))throw Error('Discord settings UI failed: '+JSON.stringify(discordUI));
-        console.log('ELECTRON_DISCORD_UI_PASS '+JSON.stringify(discordUI));
+        if(o.tabs!==4 || o.cols!==2 || !o.footer || !o.uniqueSettings || !o.artwork || o.rows<6 || o.rendered<300) throw Error('Options screen failed layout checks: '+JSON.stringify(o));
+        const discordHidden=await optionsWindow.webContents.executeJavaScript(
+          "({tab:!document.querySelector('[data-tab=discord]'),panel:!document.querySelector('#tab-discord'),inputs:!document.querySelector('#discord-presence, #discord-app-id, #discord-image, #discord-dev-portal')})");
+        if(Object.values(discordHidden).some(value=>!value))
+          throw Error('Discord JSON-only controls leaked into the Settings UI: '+JSON.stringify(discordHidden));
+        console.log('ELECTRON_DISCORD_JSON_ONLY_PASS '+JSON.stringify(discordHidden));
         try { fs.writeFileSync(path.join(reviewDir,'review-options.png'),(await optionsWindow.webContents.capturePage()).toPNG()); }
         catch(e){console.warn('SCREENSHOT_UNAVAILABLE options: '+e.message);}
         // Review the Graphics and Shader Cache screens, not only the default Display tab.

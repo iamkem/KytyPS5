@@ -97,13 +97,6 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 .cache-entry.cache-protected{background:#f9f9f8}
 .cache-entry.cache-safe{border-left:3px solid #8daf93}
 .cache-entry.cache-review{border-left:3px solid #c7b084}
-.discord-preview{display:flex;flex-direction:column;gap:7px;background:#26272c;color:#f5eee4;padding:15px;border:1px solid #514d50;border-radius:5px;line-height:1.2;margin-bottom:11px}
-.discord-preview-heading{font-size:9px;font-weight:650;color:#d5b887;letter-spacing:.07em}
-.discord-preview strong{font-size:15px}
-.discord-preview span{font-size:11px;color:#e0d8d2}
-.discord-preview small{font-size:10px;color:#c1bcb5;margin-top:5px}
-#discord-config-hint{margin-top:13px}
-#discord-app-id,#discord-image{width:100%;font-size:11px}
 .cache-inputs-actions{display:flex;align-items:center;gap:10px;min-height:24px;font-size:10px;color:#777}
 .cache-inputs-actions strong{font-size:10px;color:#5c554b}
 .cache-inputs-actions button{margin-left:auto;white-space:nowrap;background:#fff;border:1px solid #bbb;padding:5px 8px;color:#6d4d3b}

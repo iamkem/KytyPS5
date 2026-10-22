@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test tests/*.test.cjs",
-    "build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-game-icon.ps1 -Output assets/game.ico && electron-packager . DemonsSoulsLauncher --platform=win32 --arch=x64 --out=../_Build/demons-souls-launcher-v2 --overwrite --icon=assets/game.ico --ignore=tests --ignore=package-lock.json"
+    "build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-game-icon.ps1 -Output assets/game.ico && electron-packager . DemonsSoulsLauncher --platform=win32 --arch=x64 --out=../_Build/demons-souls-launcher-v3 --overwrite --icon=assets/game.ico --ignore=tests --ignore=package-lock.json"
   },
   "devDependencies": {
     "electron": "45.0.0",

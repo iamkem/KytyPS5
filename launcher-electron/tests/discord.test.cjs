@@ -31,6 +31,43 @@ test('Discord is opt-in, keeps a valid Application ID and can be switched off',(
   assert.equal(isConfigured({...s,discord_app_id:'not_an_id'}),false);
   assert.equal(logic.clean({...s,discord_app_id:'fake'}).discord_app_id,'');
 });
+test('Discord configuration is JSON-only: saved graphics changes preserve Presence settings',()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'kyty-presence-json-'));
+  try{
+    const config={
+      ...logic.defaults,
+      game:'C:\\Games\\DMSR',
+      discord_presence:true,
+      discord_app_id:'123456789012345678',
+      discord_large_image:'demons_souls',
+      render_dlss:1152
+    };
+    fs.writeFileSync(path.join(dir,'launcher-settings.json'),JSON.stringify(config,null,2));
+    const loaded=logic.loadSettings(dir);
+    assert.equal(isConfigured(loaded),true);
+    const changed=logic.applyPreset(loaded,'Performance');
+    logic.saveSettings(dir,changed);
+    const saved=JSON.parse(fs.readFileSync(path.join(dir,'launcher-settings.json'),'utf8'));
+    assert.equal(saved.discord_presence,true);
+    assert.equal(saved.discord_app_id,config.discord_app_id);
+    assert.equal(saved.discord_large_image,config.discord_large_image);
+    assert.equal(saved.render_dlss,1080);
+    saved.discord_presence=false;
+    fs.writeFileSync(path.join(dir,'launcher-settings.json'),JSON.stringify(saved));
+    assert.equal(isConfigured(logic.loadSettings(dir)),false);
+  }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+test('No Discord tab, form, or settings controls remain in Electron UI',()=>{
+  const base=path.resolve(__dirname,'..');
+  const html=fs.readFileSync(path.join(base,'options.html'),'utf8');
+  const js=fs.readFileSync(path.join(base,'options.js'),'utf8');
+  const preload=fs.readFileSync(path.join(base,'preload.cjs'),'utf8');
+  assert.doesNotMatch(html,/(?:data-tab="discord"|id="tab-discord"|id="discord-(?:presence|app-id|image|dev-portal)")/);
+  assert.doesNotMatch(js,/(?:discordHint|discordValidated|discord-presence|discord-app-id|discord-dev-portal)/);
+  assert.doesNotMatch(preload,/openDiscordDevelopers/);
+  assert.equal((html.match(/class="(?:current\s+)?(?:tab-strip)/g)||[]).length,1);
+  assert.equal((html.match(/data-tab="/g)||[]).length,4);
+});
 test('Rich Presence displays KytyPS5 and Demons Souls with session timer',()=>{
   const a=activityForGame(1729600000500,'demons_souls');
   assert.equal(a.details,'Running KytyPS5');

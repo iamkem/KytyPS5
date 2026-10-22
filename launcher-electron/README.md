@@ -1,6 +1,6 @@
 # Demon's Souls launcher — Electron (Windows)
 
-Small two-window PC game launcher styled after classic Sony PC setup dialogs. The window opens with **Play / Options / Quit** and the installed game's own art. Options uses native-feeling controls with **Display, Graphics, Advanced, Shader Cache** tabs. No backend service, no external CDN.
+Small two-window PC game launcher styled after classic Sony PC setup dialogs. The window opens with **Play / Options / Quit** and the installed game's own art. Options uses native-feeling controls with **Display, Graphics, Advanced, Shader Cache** tabs; Discord configuration is JSON-only. No backend service, no external CDN.
 
 - **Play** invokes the project's existing `run-windows.ps1` with the selected emulator executable.
 - **Options** edits the same `../launcher-settings.json` as the previous Windows launcher.
@@ -10,7 +10,21 @@ Small two-window PC game launcher styled after classic Sony PC setup dialogs. Th
 - **Content-based precompile skip**: after a compatible incremental run, a SHA-256 fingerprint records game seeds, release hints, render pass states and shader source plus cache file identity. Later timestamp-only changes can be ignored **only if** native GPU/driver identity and translator-feature stamp still match and there are no pending shards. Unknown fingerprints, packaged installs without sources, incompatible drivers or changed shader sources fall back to native incremental checking. The first clean incremental check establishes a fingerprint without compiling pipelines.
 - **Shader Cache** distinguishes the active (undeletable) cache, completed saved versions (older/newer and switchable), old unfinished shards (not switchable), and auxiliary shader data. **Save Current Version** copies the complete active GPU binaries to `_PipelineCache/generations` (requires disk space). **Use this version** changes the real active binary files only while KytyPS5 is closed, verifies GPU/driver support and rolls back if invalid. It always retains the previously active cache as a selectable version. No versions are created or deleted automatically.
 - **Cleanup safety labels** are enforced by the backend: **SAFE TO CLEAN** for interrupted archived shards (selectable), **BACKUP — REVIEW** for non-active saved generations / old driver backups (selectable with a specific warning), and **DO NOT DELETE / KEEP — PERFORMANCE** for the active cache and driver/warmup/file/precompile caches (not selectable, deletion rejected at IPC). Nothing is deleted automatically. Eligible files are moved to Windows Recycle Bin after confirmation.
-- **Discord Rich Presence (opt-in):** create an application named `KytyPS5` at https://discord.com/developers/applications, copy its **Application ID**, and enable Discord in the launcher’s Discord tab. Set an optional image asset key only after uploading the matching artwork in that application’s Rich Presence assets. While `kyty_emulator.exe` is actually running, Discord will show **KytyPS5** as the registered application, **Running KytyPS5** as details, **Playing Demon's Souls Remake** as state, and a playtime counter. The local IPC helper runs independently as a detached Node-mode Electron child, so closing the launcher does not stop the activity. It quits when the game PID ends, and reconnects automatically if Discord was closed and opened again. Discord desktop must be signed in with Activity sharing enabled; no Discord token, bot, or external server is needed. Nothing is sent until the user enables the feature and sets an ID.
+- **Discord Rich Presence (JSON-only / opt-in):** Discord configuration is intentionally **not visible in any launcher tab**. Set `discord_presence`, `discord_app_id`, and optional `discord_large_image` in the root `launcher-settings.json` as shown below. Create a Discord application named `KytyPS5` at https://discord.com/developers/applications and copy its Application ID; the displayed app name comes from Discord, not this executable. While `kyty_emulator.exe` is running, Discord shows **Running KytyPS5**, **Playing Demon's Souls Remake**, and elapsed time. Its detached local IPC agent survives closing the launcher, stops after the emulator process exits, and retries when Discord is launched later. No login token, bot, external server, or UI configuration is required.
+
+### Configure Discord only in `launcher-settings.json`
+
+Edit these properties within the existing JSON object, keeping other graphics and game settings unchanged (do not paste a second JSON object):
+
+```json
+{
+  "discord_presence": true,
+  "discord_app_id": "123456789012345678",
+  "discord_large_image": "demons_souls"
+}
+```
+
+Replace the sample ID with **your** Discord Application ID (17–20 digits). `discord_large_image` is an optional asset key uploaded in your Discord application's Rich Presence Assets; use `""` to disable the image. To disable Presence, set `"discord_presence": false`. Save the JSON before opening the launcher (or reopen the launcher after editing). All other Settings operations preserve these values even though there is no Discord UI. Presence is sent only when enabled with a valid Application ID and the game has actually started.
 - **Cancel** restores the settings snapshot from when the dialog was opened, including immediately saved preset choices.
 - Monitor selection and separate anti-aliasing are disabled, since the current emulator does not provide those independent controls.
 
@@ -28,4 +42,4 @@ npm run build
 ```
 The build converts the installed game's `sce_sys/icon0.png` into the Windows executable, window and taskbar icon (16–256 px). Game artwork is not committed or distributed. On machines without an installed game (e.g. CI), the build generates a generic sword-and-ring fallback icon instead of the old K. Override the source with `KYTY_GAME_ICON` if needed.
 
-The built launcher is under `../_Build/demons-souls-launcher-v2/DemonsSoulsLauncher-win32-x64/DemonsSoulsLauncher.exe`. Do not move only the .exe: it needs the Electron companion files in that directory. The root `launcher.cmd` launches only this personalized Electron application (or the release's `Launcher/DemonsSoulsLauncher.exe`), not the removed Windows PowerShell/WPF UIs. Core emulator/precompile scripts stay in place.
+The built launcher is under `../_Build/demons-souls-launcher-v3/DemonsSoulsLauncher-win32-x64/DemonsSoulsLauncher.exe`. Do not move only the .exe: it needs the Electron companion files in that directory. The root `launcher.cmd` launches only this personalized Electron application (or the release's `Launcher/DemonsSoulsLauncher.exe`), not the removed Windows PowerShell/WPF UIs. Core emulator/precompile scripts stay in place.

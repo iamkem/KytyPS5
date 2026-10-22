@@ -121,7 +121,7 @@ jobs:
           New-Item -ItemType Directory -Force $out | Out-Null
           Copy-Item "$build\kyty_emulator.exe", "$build\kyty_shader_precompile.exe", "$build\libwinpthread-1.dll",
             run-windows.ps1, precompile-windows.ps1, launcher.cmd, LICENSE $out
-          Copy-Item _Build\demons-souls-launcher-v2\DemonsSoulsLauncher-win32-x64 "$out\Launcher" -Recurse
+          Copy-Item _Build\demons-souls-launcher-v3\DemonsSoulsLauncher-win32-x64 "$out\Launcher" -Recurse
           Copy-Item LICENSES $out -Recurse
           Copy-Item run-windows.json "$out\launch.json"
           Copy-Item docs\PORTABLE-README.md "$out\README.md"
