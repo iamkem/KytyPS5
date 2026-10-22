@@ -4,6 +4,14 @@
 const fs=require('node:fs');
 const path=require('node:path');
 const {DiscordPresence,APP_ID_RE,IMAGE_RE}=require('./discord-presence.cjs');
+function log(event,detail=''){
+  const file=process.env.KYTY_DISCORD_LOG_FILE;
+  if(!file)return;
+  try{
+    fs.mkdirSync(path.dirname(file),{recursive:true});
+    fs.appendFileSync(file,new Date().toISOString()+' '+event+' '+String(detail).slice(0,280)+'\n');
+  }catch{}
+}
 
 function getOptions(argv){
   const values={};
@@ -28,11 +36,16 @@ function pidAlive(pid){
 function startAgent(argv){
   const options=getOptions(argv);
   // Only the game supervisor process PID, game title and session timer are sent to Discord.
-  if(!pidAlive(options.watchPid))return false;
-  const service=new DiscordPresence({...options,startedAt:Date.now()});
+  if(!pidAlive(options.watchPid)){log('GAME_ALREADY_EXITED',String(options.watchPid));return false;}
+  const service=new DiscordPresence({...options,mode:'game',startedAt:Date.now()});
+  service.on('published',()=>log('GAME_PRESENCE_PUBLISHED','Discord acknowledged SET_ACTIVITY'));
+  service.on('rejected',message=>log('GAME_PRESENCE_REJECTED',message));
+  service.on('retrying',message=>log('GAME_PRESENCE_RETRY',message));
+  log('GAME_PRESENCE_START','Emulator PID '+options.watchPid);
   const timer=setInterval(()=>{
     if(!pidAlive(options.watchPid)){
       clearInterval(timer);
+      log('GAME_PRESENCE_STOP','Emulator process ended');
       service.stop();
       setTimeout(()=>process.exit(0),350).unref();
     }

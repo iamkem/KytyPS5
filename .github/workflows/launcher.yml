@@ -30,4 +30,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: DemonsSoulsLauncher-win32-x64
-          path: _Build/demons-souls-launcher-v3/DemonsSoulsLauncher-win32-x64
+          path: _Build/demons-souls-launcher-v4/DemonsSoulsLauncher-win32-x64

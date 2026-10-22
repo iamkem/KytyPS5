@@ -49,6 +49,16 @@ function readGamePid(output){
   const pid=match?Number(match[1]):0;
   return Number.isSafeInteger(pid)&&pid>0&&pid<=0x7fffffff?pid:null;
 }
+function activityForLauncher(startedAt,image){
+  const activity={
+    type:0,
+    details:'Running KytyPS5',
+    state:'In launcher • Ready to play',
+    timestamps:{start:Math.floor(startedAt/1000)}
+  };
+  if(image)activity.assets={large_image:image,large_text:"Demon's Souls Remake • KytyPS5"};
+  return activity;
+}
 function activityForGame(startedAt,image){
   const activity={
     type:0,
@@ -61,11 +71,12 @@ function activityForGame(startedAt,image){
 }
 // A single connection retries while the owning game process exists, even if Discord starts later.
 class DiscordPresence extends EventEmitter{
-  constructor({appId,image='',startedAt=Date.now(),connect=net.createConnection,retryMs=RETRY_MS}){
+  constructor({appId,image='',mode='game',startedAt=Date.now(),connect=net.createConnection,retryMs=RETRY_MS}){
     super();
     if(!APP_ID_RE.test(appId))throw Error('Invalid Discord Application ID');
     if(image&&!IMAGE_RE.test(image))throw Error('Invalid Discord image asset key');
-    this.appId=appId;this.image=image;this.startedAt=startedAt;this.connect=connect;
+    if(!['launcher','game'].includes(mode))throw Error('Invalid Discord activity mode');
+    this.appId=appId;this.image=image;this.mode=mode;this.startedAt=startedAt;this.connect=connect;
     this.retryMs=retryMs;this.active=false;this.socket=null;this.timer=null;
     this.readyTimer=null;this.connected=false;this.generation=0;
     this.lastError=null;
@@ -83,7 +94,7 @@ class DiscordPresence extends EventEmitter{
       try{socket=this.connect(pipe);}
       catch(e){this.lastError=e;attempt();return;}
       this.socket=socket;
-      let reachedReady=false,finished=false;
+      let reachedReady=false,finished=false,activityNonce=null;
       const next=()=>{
         if(finished)return;finished=true;
         clearTimeout(this.readyTimer);this.readyTimer=null;
@@ -98,14 +109,21 @@ class DiscordPresence extends EventEmitter{
         if(opcode===3){socket.write(frame(4,payload));return;}
         if(opcode===2){next();return;}
         if(opcode!==1)return;
-        if(payload.evt==='ERROR'){this.lastError=new Error(payload.data?.message||'Discord RPC error');next();return;}
+        if(payload.evt==='ERROR'){this.lastError=new Error(payload.data?.message||'Discord RPC error');this.emit('rejected',this.lastError.message);next();return;}
+        if(payload.cmd==='SET_ACTIVITY'&&activityNonce&&payload.nonce===activityNonce){
+          this.emit('published',this.mode);
+          activityNonce=null;
+          return;
+        }
         if(payload.evt==='READY'&&!reachedReady){
           reachedReady=true;this.connected=true;
           clearTimeout(this.readyTimer);this.readyTimer=null;
+          activityNonce=randomUUID();
           socket.write(frame(1,{
             cmd:'SET_ACTIVITY',
-            nonce:randomUUID(),
-            args:{pid:process.pid,activity:activityForGame(this.startedAt,this.image)}
+            nonce:activityNonce,
+            args:{pid:process.pid,activity:this.mode==='launcher'?
+              activityForLauncher(this.startedAt,this.image):activityForGame(this.startedAt,this.image)}
           }));
           this.emit('connected');
         }
@@ -122,6 +140,7 @@ class DiscordPresence extends EventEmitter{
   }
   _schedule(){
     if(!this.active)return;
+    this.emit('retrying',this.lastError?.code||this.lastError?.message||'Discord IPC endpoint unavailable');
     clearTimeout(this.timer);
     this.timer=setTimeout(()=>{this.timer=null;this._try();},this.retryMs);
   }
@@ -139,4 +158,4 @@ class DiscordPresence extends EventEmitter{
     this.connected=false;
   }
 }
-module.exports={DiscordPresence,APP_ID_RE,IMAGE_RE,validConfig,isConfigured,frame,FrameDecoder,activityForGame,pipePath,readGamePid};
+module.exports={DiscordPresence,APP_ID_RE,IMAGE_RE,validConfig,isConfigured,frame,FrameDecoder,activityForGame,activityForLauncher,pipePath,readGamePid};

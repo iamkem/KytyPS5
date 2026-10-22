@@ -9,7 +9,7 @@ const cache = require('./cache.cjs');
 const versions=require('./cache-generations.cjs');
 const {ShaderProgress}=require('./shader-progress.cjs');
 const shaderInputs=require('./shader-inputs.cjs');
-const {isConfigured,validConfig,readGamePid}=require('./discord-presence.cjs');
+const {DiscordPresence,isConfigured,validConfig,readGamePid}=require('./discord-presence.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'kytyart',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}]);
 
 function locateProject(start){
@@ -22,6 +22,45 @@ function locateProject(start){
 }
 const ROOT=process.env.KYTY_PROJECT_ROOT || locateProject(app.isPackaged?path.dirname(process.execPath):path.resolve(__dirname,'..'));
 let mainWindow=null,optionsWindow=null,progressWindow=null,gameProcess=null,optionsSnapshot=null,optionsCommitted=false;
+let idlePresence=null,discordResumeTimer=null,discordClosing=false;
+const discordLogFile=path.join(ROOT,'_Build','run-logs','discord-presence.log');
+function discordLog(event,detail=''){
+  try{
+    fs.mkdirSync(path.dirname(discordLogFile),{recursive:true});
+    fs.appendFileSync(discordLogFile,new Date().toISOString()+' '+event+' '+String(detail).slice(0,280)+'\n');
+  }catch{}
+}
+function stopIdlePresence(){
+  if(discordResumeTimer){clearTimeout(discordResumeTimer);discordResumeTimer=null;}
+  if(idlePresence){
+    idlePresence.stop();idlePresence=null;
+    discordLog('LAUNCHER_PRESENCE_STOP');
+  }
+}
+function startIdlePresence(){
+  if(discordClosing||gameProcess||idlePresence||process.argv.includes('--smoke-ui'))return;
+  const config=logic.loadSettings(ROOT);
+  if(!isConfigured(config)){
+    if(config.discord_presence)discordLog('CONFIG_INVALID','Check discord_app_id / discord_large_image');
+    return;
+  }
+  const cfg=validConfig(config);
+  idlePresence=new DiscordPresence({appId:cfg.appId,image:cfg.image,mode:'launcher'});
+  idlePresence.on('published',()=>discordLog('LAUNCHER_PRESENCE_PUBLISHED','Discord acknowledged SET_ACTIVITY'));
+  idlePresence.on('rejected',message=>discordLog('LAUNCHER_PRESENCE_REJECTED',message));
+  idlePresence.on('retrying',message=>discordLog('LAUNCHER_PRESENCE_RETRY',message));
+  idlePresence.start();
+  discordLog('LAUNCHER_PRESENCE_CONNECTING');
+}
+function resumeIdlePresence(){
+  if(discordClosing)return;
+  stopIdlePresence();
+  // Allow game helper to clear its own status and exit before publishing idle activity.
+  discordResumeTimer=setTimeout(()=>{
+    discordResumeTimer=null;
+    if(!gameProcess)startIdlePresence();
+  },2800);
+}
 // Do not share Chromium disk cache with an older launcher version that may be open.
 const stableProfile=path.join(app.getPath('appData'),'KytyPS5-ElectronLauncher');
 fs.mkdirSync(stableProfile,{recursive:true});
@@ -104,11 +143,13 @@ function startDiscordAgent(settings,gamePid){
       '--app-id',presence.appId,
       '--image',presence.image
     ],{cwd:ROOT,detached:true,windowsHide:true,stdio:'ignore',
-      env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});
-    child.on('error',error=>console.warn('Discord Presence helper failed to launch:',error.message));
+      env:{...process.env,ELECTRON_RUN_AS_NODE:'1',KYTY_DISCORD_LOG_FILE:discordLogFile}});
+    child.on('error',error=>{discordLog('GAME_HELPER_ERROR',error.message);console.warn('Discord Presence helper failed to launch:',error.message);});
+    discordLog('GAME_HELPER_STARTED','Emulator PID '+gamePid+' / helper PID '+child.pid);
     child.unref();
     return true;
   }catch(error){
+    discordLog('GAME_HELPER_UNAVAILABLE',error.message);
     console.warn('Discord Presence unavailable:',error.message);
     return false;
   }
@@ -126,7 +167,7 @@ function launchCommand(spec,{restore=false,visible=false,onGamePid=null}={}) {
     });
     child.stderr.on('data',()=>{});
   }
-  child.on('error',err=>{gameProcess=null;mainWindow?.show();mainWindow?.webContents.send('launcher:game-exit');dialog.showErrorBox('Unable to start KytyPS5',err.message);});
+  child.on('error',err=>{gameProcess=null;resumeIdlePresence();discordLog('GAME_START_ERROR',err.message);mainWindow?.show();mainWindow?.webContents.send('launcher:game-exit');dialog.showErrorBox('Unable to start KytyPS5',err.message);});
   child.on('exit',()=>{if (restore&&mainWindow) {mainWindow.show();mainWindow.focus();mainWindow.webContents.send('launcher:game-exit');}});
   child.unref();
   return child;
@@ -154,8 +195,16 @@ app.whenReady().then(()=>{
     const spec=logic.buildPlayArgs(ROOT,cfg);
     logic.saveSettings(ROOT,cfg);
     if (gameProcess) throw Error('KytyPS5 is already running.');
-    gameProcess=launchCommand(spec,{restore:true,onGamePid:isConfigured(cfg)?pid=>startDiscordAgent(cfg,pid):null});
-    gameProcess.on('exit',()=>{gameProcess=null;});
+    stopIdlePresence();
+    gameProcess=launchCommand(spec,{restore:true,onGamePid:isConfigured(cfg)?pid=>{
+      discordLog('GAME_PID_DETECTED',String(pid));
+      startDiscordAgent(cfg,pid);
+    }:null});
+    gameProcess.on('exit',()=>{
+      gameProcess=null;
+      discordLog('GAME_EXIT','Restoring launcher activity after helper cleanup');
+      resumeIdlePresence();
+    });
     mainWindow?.hide();
     return true;
   });
@@ -311,6 +360,7 @@ app.whenReady().then(()=>{
   });
   ipcMain.handle('launcher:quit',()=>{app.quit();return true;});
   createWindow();
+  startIdlePresence();
   if (process.argv.includes('--smoke-ui')) {
     // GUI integration test: render both native Electron windows and capture review images.
     (async()=>{
@@ -404,4 +454,5 @@ app.whenReady().then(()=>{
     })();
   }
 });
+app.on('before-quit',()=>{discordClosing=true;stopIdlePresence();});
 app.on('window-all-closed',()=>{if (process.platform !== 'darwin')app.quit();});

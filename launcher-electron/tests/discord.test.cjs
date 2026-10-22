@@ -6,7 +6,7 @@ const path=require('node:path');
 const os=require('node:os');
 const net=require('node:net');
 const {spawnSync}=require('node:child_process');
-const {DiscordPresence,frame,FrameDecoder,activityForGame,pipePath,isConfigured,readGamePid}=require('../discord-presence.cjs');
+const {DiscordPresence,frame,FrameDecoder,activityForGame,activityForLauncher,pipePath,isConfigured,readGamePid}=require('../discord-presence.cjs');
 const {getOptions,pidAlive}=require('../discord-agent.cjs');
 const logic=require('../logic.cjs');
 function waitUntil(fn,ms=3000){
@@ -76,6 +76,46 @@ test('Rich Presence displays KytyPS5 and Demons Souls with session timer',()=>{
   assert.equal(a.assets.large_image,'demons_souls');
   assert.equal(activityForGame(1729600000500,'').assets,undefined);
   assert.match(pipePath(0),/discord-ipc-0$/);
+});
+test('Opening the launcher publishes KytyPS5 idle status; Play status is distinct',()=>{
+  const idle=activityForLauncher(1729600000500,'playstation');
+  const game=activityForGame(1729600000500,'playstation');
+  assert.equal(idle.details,'Running KytyPS5');
+  assert.match(idle.state,/In launcher/);
+  assert.equal(game.state,"Playing Demon's Souls Remake");
+  assert.equal(idle.assets.large_image,'playstation');
+  assert.equal(idle.timestamps.start,1729600000);
+});
+test('Launcher process receives confirmed Discord activity before game launch',async()=>{
+  const requests=[];const sockets=new Set();
+  const server=net.createServer(socket=>{
+    sockets.add(socket);
+    const decoder=new FrameDecoder((op,data)=>{
+      if(op===0)socket.write(frame(1,{evt:'READY',data:{}}));
+      if(op===1&&data.cmd==='SET_ACTIVITY'){
+        requests.push(data);
+        socket.write(frame(1,{cmd:'SET_ACTIVITY',nonce:data.nonce,data:{}}));
+      }
+    });
+    socket.on('data',buffer=>decoder.feed(buffer));
+    socket.on('close',()=>sockets.delete(socket));
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const client=new DiscordPresence({appId:'123456789012345678',mode:'launcher',image:'playstation',
+    connect:()=>net.createConnection(server.address().port,'127.0.0.1'),retryMs:100});
+  const statuses=[];
+  client.on('published',mode=>statuses.push(mode));
+  try{
+    client.start();
+    await waitUntil(()=>statuses.includes('launcher'));
+    assert.equal(requests[0].args.activity.details,'Running KytyPS5');
+    assert.match(requests[0].args.activity.state,/In launcher/);
+    client.stop();
+    await waitUntil(()=>requests.some(p=>p.args.activity===null));
+  }finally{
+    client.stop();for(const socket of sockets)socket.destroy();
+    await new Promise(resolve=>server.close(resolve));
+  }
 });
 test('RPC wire format handles fragmented frames and rejects malformed frames',()=>{
   const seen=[];
