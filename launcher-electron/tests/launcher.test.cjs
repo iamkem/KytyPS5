@@ -31,7 +31,9 @@ test('Settings migrate from PowerShell JSON and round-trip without touching real
   }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
 test('Four resolution-based presets change the actual emulator command',{skip:!localReady},()=>{
-  const base=lib.loadSettings(root);
+  // Validate the graphics presets independently of the player's saved Frame Generation mode.
+  // A real user can have framegen=2 (DLSS-G 2x); preset selection must not silently disable it.
+  const base=lib.clean({...lib.loadSettings(root),framegen:0});
   for(const [name,p] of Object.entries(lib.presets)){
     const s=lib.applyPreset(base,name);
     const cmd=lib.buildPlayArgs(root,s);
