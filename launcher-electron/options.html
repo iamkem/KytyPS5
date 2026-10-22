@@ -6,6 +6,7 @@
 <button data-tab="display" class="current" role="tab" aria-selected="true">Display</button>
 <button data-tab="graphics" role="tab" aria-selected="false">Graphics</button>
 <button data-tab="advanced" role="tab" aria-selected="false">Advanced</button>
+<button data-tab="discord" role="tab" aria-selected="false">Discord</button>
 <button data-tab="cache" role="tab" aria-selected="false">Shader Cache</button>
 </nav>
 <div class="tab-content">
@@ -56,6 +57,34 @@
  <div class="maintenance"><p>Maintenance</p><button id="shader-update">Update Missing Shaders</button><button id="shader-view-progress">View Progress…</button><button id="logs">Open Logs</button><button id="export-hints">Export Diagnostics</button></div>
  <p class="muted-info">Manage old and current shader caches in the <strong>Shader Cache</strong> tab.</p>
 </div></div></section>
+<section id="tab-discord" class="tab-panel" role="tabpanel">
+<div class="two-columns">
+  <div class="field-col">
+    <p class="settings-heading">Discord Rich Presence</p>
+    <label class="field"><span>Enable Presence</span><input type="checkbox" id="discord-presence"></label>
+    <div class="path-field"><span>Discord Application ID</span>
+      <div class="path-controls"><input id="discord-app-id" inputmode="numeric" maxlength="20" placeholder="17–20 digit Application ID" autocomplete="off" spellcheck="false"></div>
+    </div>
+    <div class="path-field"><span>Large Image Asset Key (optional)</span>
+      <div class="path-controls"><input id="discord-image" maxlength="64" placeholder="e.g. demons_souls" autocomplete="off" spellcheck="false"></div>
+    </div>
+    <p class="muted-info" id="discord-config-hint">Disabled until you enable it and supply a valid Discord Application ID.</p>
+  </div>
+  <div class="field-col right-col">
+    <p class="settings-heading">Activity Preview</p>
+    <div class="discord-preview">
+      <div class="discord-preview-heading">PLAYING KYTYPS5</div>
+      <strong>KytyPS5</strong>
+      <span>Running KytyPS5</span>
+      <span>Playing Demon's Souls Remake</span>
+      <small>Elapsed time begins when you press Play.</small>
+    </div>
+    <p class="muted-info">Create a Discord application named <strong>KytyPS5</strong> and paste its Application ID here. Discord uses that registered name for the top activity line.</p>
+    <button id="discord-dev-portal" class="quiet-button">Open Discord Developer Portal</button>
+    <p class="muted-info">Only publishes while the game is running. The helper continues after you close the launcher window and stops when the game exits. No Discord login or bot token is required.</p>
+  </div>
+</div>
+</section>
 <section id="tab-cache" class="tab-panel" role="tabpanel">
  <div class="cache-screen">
   <div class="cache-top"><div><strong>Shader Cache Versions</strong><p id="cache-status">Checking current GPU/driver cache…</p></div><div class="cache-actions"><button id="cache-snapshot">Save Current Version…</button><button id="cache-refresh">Refresh</button></div></div>

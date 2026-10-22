@@ -9,7 +9,8 @@ const defaults = Object.freeze({
   ratio: '16:9', quality: 'standard', vsync: false, hdr: false, framegen: 0,
   hud: 1, streamline: '', safegpu: false, upscaler: 'dlss', render_dlss: 1152,
   fsr: false, output: '4k', lowlatency: true, present_direct: false, antilag: false,
-  ram_diet: true, ram16_backing: true, vram_budget_mb: 0
+  ram_diet: true, ram16_backing: true, vram_budget_mb: 0,
+  discord_presence: false, discord_app_id: '', discord_large_image: ''
 });
 // Actual internal render resolution at 16:9. Display resolution is independent.
 const presets = Object.freeze({
@@ -18,7 +19,7 @@ const presets = Object.freeze({
   Balanced: Object.freeze({render_dlss:1152,quality:'low',framegen:0,fsr:false,output:'4k',upscaler:'dlss'}),
   Quality: Object.freeze({render_dlss:1440,quality:'standard',framegen:0,fsr:false,output:'4k',upscaler:'dlss'})
 });
-const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing'];
+const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing','discord_presence'];
 const numericKeys = ['language','render','render_dlss','framegen','hud','vram_budget_mb'];
 function clean(candidate = {}) {
   if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) throw Error('Invalid settings object');
@@ -42,6 +43,8 @@ function clean(candidate = {}) {
   if (result.framegen > 6) result.framegen = 0;
   if (result.hud > 2) result.hud = 0;
   if (result.language > 29) result.language = 1;
+  if (!/^\d{17,20}$/.test(result.discord_app_id)) result.discord_app_id = '';
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(result.discord_large_image)) result.discord_large_image = '';
   return result;
 }
 function loadSettings(root) {

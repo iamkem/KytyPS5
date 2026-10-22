@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('launcher', Object.freeze({
   chooseGame: () => ipcRenderer.invoke('launcher:choose-game'),
   chooseStreamline: () => ipcRenderer.invoke('launcher:choose-streamline'),
   shaderUpdate: () => ipcRenderer.invoke('launcher:shader-update'),
+  openDiscordDevelopers: () => ipcRenderer.invoke('launcher:discord-developers'),
   shaderStatus: () => ipcRenderer.invoke('launcher:shader-status'),
   showShaderProgress: () => ipcRenderer.invoke('launcher:shader-progress-window'),
   stopShaderUpdate: () => ipcRenderer.invoke('launcher:shader-stop'),

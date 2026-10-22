@@ -9,6 +9,7 @@ const cache = require('./cache.cjs');
 const versions=require('./cache-generations.cjs');
 const {ShaderProgress}=require('./shader-progress.cjs');
 const shaderInputs=require('./shader-inputs.cjs');
+const {isConfigured,validConfig,readGamePid}=require('./discord-presence.cjs');
 protocol.registerSchemesAsPrivileged([{scheme:'kytyart',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}]);
 
 function locateProject(start){
@@ -91,8 +92,40 @@ function openOptions() {
     optionsWindow=null;optionsSnapshot=null;
   });
 }
-function launchCommand(spec,{restore=false,visible=false}={}) {
-  const child=spawn(spec.command,spec.args,{cwd:ROOT,windowsHide:!visible,stdio:'ignore'});
+function startDiscordAgent(settings,gamePid){
+  if(!isConfigured(settings)||!gamePid||process.argv.includes('--smoke-ui'))return false;
+  const presence=validConfig(settings);
+  // Use the installed Electron executable as a plain Node process to avoid a second Chromium instance.
+  // Detached/unref + an independent supervisor PID lets the helper survive the launcher's Quit action.
+  try{
+    const child=spawn(process.execPath,[
+      path.join(__dirname,'discord-agent.cjs'),
+      '--watch-pid',String(gamePid),
+      '--app-id',presence.appId,
+      '--image',presence.image
+    ],{cwd:ROOT,detached:true,windowsHide:true,stdio:'ignore',
+      env:{...process.env,ELECTRON_RUN_AS_NODE:'1'}});
+    child.on('error',error=>console.warn('Discord Presence helper failed to launch:',error.message));
+    child.unref();
+    return true;
+  }catch(error){
+    console.warn('Discord Presence unavailable:',error.message);
+    return false;
+  }
+}
+function launchCommand(spec,{restore=false,visible=false,onGamePid=null}={}) {
+  const child=spawn(spec.command,spec.args,{cwd:ROOT,windowsHide:!visible,
+    stdio:onGamePid?['ignore','pipe','pipe']:'ignore'});
+  if(onGamePid){
+    let recent='',recognized=false;
+    child.stdout.on('data',data=>{
+      if(recognized)return;
+      recent=(recent+data.toString('utf8')).slice(-900);
+      const pid=readGamePid(recent);
+      if(pid){recognized=true;onGamePid(pid);}
+    });
+    child.stderr.on('data',()=>{});
+  }
   child.on('error',err=>{gameProcess=null;mainWindow?.show();mainWindow?.webContents.send('launcher:game-exit');dialog.showErrorBox('Unable to start KytyPS5',err.message);});
   child.on('exit',()=>{if (restore&&mainWindow) {mainWindow.show();mainWindow.focus();mainWindow.webContents.send('launcher:game-exit');}});
   child.unref();
@@ -121,7 +154,7 @@ app.whenReady().then(()=>{
     const spec=logic.buildPlayArgs(ROOT,cfg);
     logic.saveSettings(ROOT,cfg);
     if (gameProcess) throw Error('KytyPS5 is already running.');
-    gameProcess=launchCommand(spec,{restore:true});
+    gameProcess=launchCommand(spec,{restore:true,onGamePid:isConfigured(cfg)?pid=>startDiscordAgent(cfg,pid):null});
     gameProcess.on('exit',()=>{gameProcess=null;});
     mainWindow?.hide();
     return true;
@@ -165,6 +198,7 @@ app.whenReady().then(()=>{
     launchCommand(logic.buildPrecompileArgs(ROOT,currentSettings(),'-ExportHints'),{restore:false,visible:true});
     return true;
   });
+  ipcMain.handle('launcher:discord-developers',()=>shell.openExternal('https://discord.com/developers/applications'));
   ipcMain.handle('launcher:logs',()=>{
     const p=path.join(ROOT,'_Build','run-logs');fs.mkdirSync(p,{recursive:true});shell.openPath(p);
     return true;
@@ -303,7 +337,12 @@ app.whenReady().then(()=>{
         await new Promise(resolve=>setTimeout(resolve,500));
         const o=await optionsWindow.webContents.executeJavaScript(
           "({tabs:document.querySelectorAll('.tab-strip button').length,cols:document.querySelectorAll('#tab-display .field-col').length,footer:!!document.querySelector('#ok')&&!!document.querySelector('#cancel'),rows:document.querySelectorAll('#tab-display .field').length,uniqueSettings:(()=>{const a=[...document.querySelectorAll('select[id],input[id]')].filter(el=>!['preset','language','game-path','sdk-path'].includes(el.id));return new Set(a.map(el=>el.id)).size===a.length})(),artwork:document.querySelector('.options-banner img').naturalWidth>0,rendered:document.querySelector('#tab-display').getBoundingClientRect().height})");
-        if(o.tabs!==4 || o.cols!==2 || !o.footer || !o.uniqueSettings || !o.artwork || o.rows<6 || o.rendered<300) throw Error('Options screen failed layout checks: '+JSON.stringify(o));
+        if(o.tabs!==5 || o.cols!==2 || !o.footer || !o.uniqueSettings || !o.artwork || o.rows<6 || o.rendered<300) throw Error('Options screen failed layout checks: '+JSON.stringify(o));
+        await optionsWindow.webContents.executeJavaScript("document.querySelector('[data-tab=discord]').click()");
+        const discordUI=await optionsWindow.webContents.executeJavaScript(
+          "({enable:!!document.querySelector('#discord-presence'),appId:!!document.querySelector('#discord-app-id'),asset:!!document.querySelector('#discord-image'),preview:document.querySelector('.discord-preview')?.textContent.includes('Playing Demon'),developer:!!document.querySelector('#discord-dev-portal')})");
+        if(Object.values(discordUI).some(v=>!v))throw Error('Discord settings UI failed: '+JSON.stringify(discordUI));
+        console.log('ELECTRON_DISCORD_UI_PASS '+JSON.stringify(discordUI));
         try { fs.writeFileSync(path.join(reviewDir,'review-options.png'),(await optionsWindow.webContents.capturePage()).toPNG()); }
         catch(e){console.warn('SCREENSHOT_UNAVAILABLE options: '+e.message);}
         // Review the Graphics and Shader Cache screens, not only the default Display tab.

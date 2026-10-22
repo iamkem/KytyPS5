@@ -35,10 +35,22 @@ function fill(){
   set('hdr',s.hdr);set('cheats',s.cheats);
   set('render-height',s.upscaler==='dlss'?s.render_dlss:s.render);
   set('game-path',s.game);set('sdk-path',s.streamline);
+  set('discord-presence',s.discord_presence);set('discord-app-id',s.discord_app_id);set('discord-image',s.discord_large_image);
+  discordHint();
   set('preset',activePreset(s));
   $('preset-summary').textContent=activePreset(s)+' · '+(s.upscaler==='dlss'?'DLSS':'Game TAA')+' '+(s.upscaler==='dlss'?s.render_dlss:s.render)+'p · '+(s.quality==='standard'?'Standard (PS5)':s.quality);
   $('output').disabled=s.upscaler==='dlss';
  }finally{syncing=false;}
+}
+function discordHint(){
+ const hint=$('discord-config-hint');
+ const enabled=$('discord-presence').checked;
+ const id=$('discord-app-id').value.trim();
+ const img=$('discord-image').value.trim();
+ if(!enabled)hint.textContent='Disabled. The game will run normally without Discord Presence.';
+ else if(!/^\d{17,20}$/.test(id))hint.textContent='Enter the Application ID from Discord Developer Portal (17–20 digits).';
+ else if(img&&!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(img))hint.textContent='Image asset key can contain letters, digits, underscores and hyphens only.';
+ else hint.textContent='Ready. Presence will appear when the game launches and Discord desktop is running.';
 }
 function update(id){
  if(syncing)return;
@@ -92,9 +104,28 @@ function shaderSummary(s){
 window.launcher.onShaderProgress(shaderSummary);
 window.launcher.shaderStatus().then(shaderSummary).catch(()=>{});
 $('logs').addEventListener('click',()=>window.launcher.openLogs());
+$('discord-dev-portal').addEventListener('click',()=>window.launcher.openDiscordDevelopers());
+$('discord-presence').addEventListener('change',()=>{
+ state.discord_presence=$('discord-presence').checked;discordHint();
+});
+for(const [id,key] of [['discord-app-id','discord_app_id'],['discord-image','discord_large_image']]){
+ $(id).addEventListener('input',()=>{state[key]=$(id).value.trim();discordHint();});
+}
+function discordValidated(){
+ if(!state.discord_presence)return true;
+ if(!/^\d{17,20}$/.test(state.discord_app_id)){
+  showMessage('Discord: set a valid 17–20 digit Application ID first.');
+  document.querySelector('[data-tab=discord]').click();return false;
+ }
+ if(state.discord_large_image&&!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(state.discord_large_image)){
+  showMessage('Discord: invalid image asset key.');
+  document.querySelector('[data-tab=discord]').click();return false;
+ }
+ return true;
+}
 $('reset').addEventListener('click',()=>{Object.assign(state,presets.Performance);fill();showMessage('1080p Performance selected — press OK');});
 $('cancel').addEventListener('click',()=>window.launcher.closeOptions(false));
-$('ok').addEventListener('click',async()=>{try{await window.launcher.save(state);await window.launcher.closeOptions(true);}catch(e){showMessage(e.message);}});
+$('ok').addEventListener('click',async()=>{if(!discordValidated())return;try{await window.launcher.save(state);await window.launcher.closeOptions(true);}catch(e){showMessage(e.message);}});
 const friendlyBytes=b=>b>=1024**3?(b/1024**3).toFixed(2)+' GiB':(b/1024**2).toFixed(0)+' MiB';
 function cacheSelection(){
  const selected=[...document.querySelectorAll('.cache-check:checked')].map(el=>el.dataset.id);
