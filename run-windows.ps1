@@ -402,23 +402,16 @@ $seeds = @("$PSScriptRoot\$seedName", "$PSScriptRoot\_Build\static-precompile\$s
 # precompile program, as precompile-windows.ps1 makes it (--make-seeds, with the render-pass states of
 # pass-states.json; precompile.py seeds without Python).
 $passStates = "$PSScriptRoot\tools\local\static-precompile\pass-states.json"
-# One another program made (<file>.program: its size and time) is made again (a release unpacked over the last) and
-# replaced where it lists something else (precompile-windows.ps1 has the same).
-$programStamp = if (Test-Path $tool) { "$((Get-Item $tool).Length) $((Get-Item $tool).LastWriteTimeUtc.Ticks)" }
-$staleSeeds = $seeds -and $programStamp -and (!(Test-Path "$seeds.program") -or "$(Get-Content "$seeds.program" -Raw)".Trim() -ne $programStamp)
-if ((!$seeds -or $staleSeeds) -and !$Precompile -and (Test-Path $tool) -and (Test-Path $passStates)) {
-	$target = if ($seeds) { $seeds } elseif (Test-Path "$PSScriptRoot\_Build") { "$PSScriptRoot\_Build\static-precompile\$seedName" } else { "$PSScriptRoot\$seedName" }
-	$made = if ($staleSeeds) { "$target.new" } else { $target }
-	New-Item -ItemType Directory -Force (Split-Path $made) | Out-Null
-	Write-Host "shaders:  listing the game's shaders from its files $(if ($staleSeeds) { 'again (another precompile program)' } else { '(once)' })"
-	& $tool --game $Game --make-seeds $made --states $passStates | Out-Null
-	if ($LASTEXITCODE -eq 0 -and (Test-Path $made)) {
-		if ($staleSeeds -and (Get-FileHash $made).Hash -eq (Get-FileHash $target).Hash) { Remove-Item $made } elseif ($staleSeeds) { Move-Item -Force $made $target }
-		Set-Content "$target.program" $programStamp
-		$seeds = $target
-	} elseif (!$staleSeeds) {
-		Write-Host 'shaders:  listing failed: the game compiles its shaders when they first appear'
-	}
+# Reuse existing shader seeds across builds. The executable timestamp/size is not a shader-content identity:
+# rebuilding unrelated RAM/VRAM or launcher code must never regenerate seeds or invalidate the static cache.
+# To intentionally regenerate seeds after a shader-extractor change use precompile-windows.ps1 -RefreshSeeds.
+if (!$seeds -and !$Precompile -and (Test-Path $tool) -and (Test-Path $passStates)) {
+	$target = if (Test-Path "$PSScriptRoot\_Build") { "$PSScriptRoot\_Build\static-precompile\$seedName" } else { "$PSScriptRoot\$seedName" }
+	New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
+	Write-Host "shaders:  listing the game's shaders from its files (first time only)"
+	& $tool --game $Game --make-seeds $target --states $passStates | Out-Null
+	if ($LASTEXITCODE -eq 0 -and (Test-Path $target)) { $seeds = $target }
+	else { Write-Host 'shaders:  listing failed: the game compiles its shaders when they first appear' }
 }
 $shaders = !$Precompile -and $seeds -and (Test-Path $tool)
 # The precompile program on the launch's CPUs, its output in the console or a file: its exit code.
@@ -443,9 +436,10 @@ if ($shaders) {
 	# behind after a merge).
 	# Outdated: made from the seeds of an older precompile program, which listed fewer of the game's shaders.
 	$cacheOutdated = $status -match 'static cache outdated'
+	$cacheIncompatible = $status -match 'static cache stale'
 	$cacheReady = $status -match 'static cache current' -and
 		!(Get-ChildItem "$PSScriptRoot\_PipelineCache\static\*.shard*" -ErrorAction SilentlyContinue | Where-Object Length -gt 1MB)
-	Write-Host "shaders:  prefetch inputs $(if ($inputsReady) { 'ready' } else { 'to be made' }), static pipeline cache $(if ($cacheReady) { 'ready' } elseif ($cacheOutdated) { 'out of date (precompile-windows.ps1 compiles what is new)' } else { 'not made (precompile-windows.ps1)' })"
+	Write-Host "shaders:  prefetch inputs $(if ($inputsReady) { 'ready' } else { 'to be made' }), static pipeline cache $(if ($cacheReady) { 'ready' } elseif ($cacheOutdated) { 'reusable, optional incremental update for missing pipelines' } elseif ($cacheIncompatible) { 'incompatible with this GPU/driver (cannot reuse old driver binaries)' } else { 'not made (precompile-windows.ps1)' })"
 }
 
 # -Prompt: the game version and the precompile, before anything starts.
@@ -470,7 +464,7 @@ if ($Prompt -and ($offer -or !$tested)) {
 		if ($choice -ne 0 -and $choice -ne 1) { Write-Host 'cancelled'; return }
 		if ($choice -eq 0) {
 			try {
-				& "$PSScriptRoot\precompile-windows.ps1" -Game $Game -Affinity $mask
+				& "$PSScriptRoot\precompile-windows.ps1" -Game $Game -Affinity $mask -Exe $tool -Incremental
 				$inputsReady = $true # the full run ends with them
 			} catch {
 				Write-Host "precompile failed ($($_.Exception.Message)); starting the game anyway"

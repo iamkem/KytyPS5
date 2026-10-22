@@ -1,37 +1,33 @@
-name: Launcher check (Windows)
+name: Electron Launcher (Windows)
 
-# KytyLauncher.exe (launcher-windows) on pushes that change it: it builds and starts (--dry-run prints the commands
-# the default settings make). Nothing is published; the release workflow (build.yml) builds it again into the package.
-# The exe is kept as an artifact for a few days, to try it without building.
 on:
   push:
-    paths: [ 'launcher-windows/**', '.github/workflows/launcher.yml' ]
+    paths:
+      - 'launcher-electron/**'
+      - 'launcher.cmd'
+      - '.github/workflows/launcher.yml'
   workflow_dispatch:
 
 jobs:
   launcher:
-    name: Build and start the launcher
     runs-on: windows-2022
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build
-        shell: cmd
-        run: call launcher-windows\build.cmd || exit /b 1
-
-      - name: Start (--dry-run)
-        shell: pwsh
-        run: |
-          $out = Join-Path $env:RUNNER_TEMP 'dry-run.txt'
-          $process = Start-Process -FilePath _Build\launcher\KytyLauncher.exe -ArgumentList '--dry-run', "`"$out`"" -Wait -PassThru
-          if ($process.ExitCode -ne 0 -or !(Test-Path $out)) { throw "KytyLauncher.exe --dry-run: exit $($process.ExitCode)" }
-          Get-Content $out
-          if (!(Select-String -Path $out -Pattern 'run-windows\.ps1" -Prompt -Follow' -Quiet)) { throw 'no play command' }
-
-      - name: Upload
-        uses: actions/upload-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          name: KytyLauncher
-          path: _Build/launcher/KytyLauncher.exe
-          retention-days: 7
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: launcher-electron/package-lock.json
+      - name: Install dependencies
+        working-directory: launcher-electron
+        run: npm ci --no-audit --no-fund
+      - name: Verify presets, cache and command integration
+        working-directory: launcher-electron
+        run: npm test
+      - name: Package desktop launcher
+        working-directory: launcher-electron
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DemonsSoulsLauncher-win32-x64
+          path: _Build/demons-souls-launcher/DemonsSoulsLauncher-win32-x64

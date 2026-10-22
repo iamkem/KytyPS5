@@ -1,3 +1,5 @@
+> **Historical upstream release notes:** the `KytyLauncher.exe` WPF launcher described below has been replaced in this fork with the personal **Demon's Souls PC Launcher** (`launcher.cmd` / `Launcher/DemonsSoulsLauncher.exe`). The original notes remain as historical development context.
+
 ## New in this build
 
 ![KytyLauncher.exe](https://raw.githubusercontent.com/chenxiao07/KytyPS5/v20261022/docs/images/launcher.png)

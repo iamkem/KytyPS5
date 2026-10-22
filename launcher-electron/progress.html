@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shader Update</title><link rel="stylesheet" href="style.css"></head>
+<body class="progress-screen">
+<main class="progress-shell">
+  <header class="progress-header">
+    <div><small>KYTYPS5 · SHADER CACHE</small><h1>Shader update</h1></div>
+    <div id="shader-state" class="progress-state">Not started</div>
+  </header>
+  <section class="progress-info">
+    <strong id="shader-phase">Checking update status…</strong>
+    <div class="progress-meta"><span id="shader-elapsed">Elapsed —</span><span id="shader-shards">Waiting for shard plan</span></div>
+    <div class="progress-track"><div id="shader-bar" class="progress-bar indeterminate"></div></div>
+    <div id="shader-percentage" class="progress-description">Preparing shader update</div>
+    <p class="progress-hint">Already compiled pipelines are reused. Shader updates may take a while; progress is based on completed shards, not an ETA. You can close this window without stopping the update.</p>
+  </section>
+  <div class="progress-log-title"><strong>Live activity</strong><span>Detailed per-shard logs remain available in Run Logs</span></div>
+  <pre id="shader-output" class="progress-output" aria-live="polite">Waiting for log messages…</pre>
+  <footer class="progress-footer">
+    <button id="shader-open-log">Open Log Folder</button>
+    <span id="shader-result" aria-live="polite"></span>
+    <div class="spacer"></div>
+    <button id="shader-stop" class="progress-stop" disabled>Stop after current shards</button>
+    <button id="shader-close">Close Window</button>
+  </footer>
+</main><script src="progress.js"></script>
+</body></html>

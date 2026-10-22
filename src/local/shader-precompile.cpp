@@ -267,6 +267,7 @@ int main(int argc, char* argv[]) {
 		            !built                                                     ? "stale"
 		            : PipelineCache::StaticCacheCurrent(graphics, options.seeds) ? "current"
 		                                                                         : "outdated");
+		std::printf("translator features %s\n", PipelineCache::StaticCacheFeaturesCurrent() ? "current" : "stale");
 		std::fflush(nullptr);
 		std::_Exit(0);
 	}

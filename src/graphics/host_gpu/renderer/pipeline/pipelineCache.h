@@ -174,6 +174,8 @@ public:
 	// newer precompile program lists more and makes the seeds again: what is new is compiled then).
 	static bool StaticInputsCurrent(GraphicContext& graphics, const std::filesystem::path& seeds);
 	static bool StaticCacheCurrent(GraphicContext& graphics, const std::filesystem::path& seeds);
+	// Report shader translator feature compatibility independently from input file timestamps.
+	static bool StaticCacheFeaturesCurrent();
 	// The caches the shards of a precompile saved next to the static cache, merged into it. With
 	// pipeline binaries and `prune`, the store becomes the shards' pipelines only (a whole run's: what
 	// older runs left that no seed makes any more is dropped).
@@ -418,6 +420,7 @@ private:
 	// may still use them).
 	std::vector<Pipeline*>    m_optimizing;
 	std::vector<vk::Pipeline> m_replaced_pipelines;
+	std::vector<int64_t>      m_replaced_at; // (KYTY_RAM_DIET) steady_clock time each was replaced
 	uint32_t                  m_unoptimized_builds = 0;
 	std::atomic<uint32_t>     m_optimized_builds {0}; // finished by workers
 	uint32_t                  m_promoted_builds = 0;  // of those, seen by PromoteOptimized

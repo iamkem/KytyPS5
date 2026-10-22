@@ -84,16 +84,14 @@ folder (usually named `PPSA01341-app0`).
 
 ## Starting the game
 
-**Double-click `KytyLauncher.exe`** (or `launcher.cmd`) for the settings window, in English or Chinese. Its
-pages: **Play** (the game folder or `.zar`; checks of the game, graphics card, RAM, precompiled shaders and
-DLSS/FSR; the Play button), **Display** (resolution, aspect ratio, fullscreen, HDR, up to 120 fps, VSync, low
-latency), **Graphics** (upscaler, render height, game output, graphics preset, frame generation), **Game** (console
-language, cheats), **Shaders** (precompile, optionally on the efficiency cores only so the PC stays responsive;
-export shader hints), **Advanced** (performance overlay, red-zone protection, safe GPU mode, the launcher's
-language, the logs folder) and **Experimental** (options still being tried out, each with the issue that collects
-how it goes: direct presentation for VRR displays, AMD Anti-Lag). It remembers the settings (`launcher-settings.json`) and needs nothing installed (.NET
-Framework 4.7.2, part of Windows 10 and 11). Windows may ask before its first start ("More info", "Run anyway"):
-it is not signed. The earlier PowerShell window (`launcher.ps1`) still works.
+**Double-click `launcher.cmd`** (or `Launcher\\DemonsSoulsLauncher.exe`) to open the Electron-based desktop launcher.
+The main window has Play, Options and Quit. Options has **Display** (window mode, resolution, HDR, VSync),
+**Graphics** (Ultra Performance 900p / Performance 1080p / Balanced 1152p / Quality 1440p, render height,
+DLSS and frame generation), **Advanced** (RAM16, GPU memory, mods, maintenance), and **Shader Cache**
+(active binaries locked against deletion, selectable completed snapshots marked older/newer, old incomplete shards not switchable; selectable removal of inactive versions to Windows Recycle Bin). Save Current Version copies the current cache to `_PipelineCache/generations`; Use this version swaps the completed cache after checking GPU/driver compatibility and preserves the previous active cache. Cleanup labels distinguish SAFE TO CLEAN (archived incomplete shards), BACKUP — REVIEW (inactive complete/old driver backups), and DO NOT DELETE / KEEP — PERFORMANCE (active, warmup, local driver, file and precompile working caches). Protected groups cannot be selected or deleted; every permitted removal requires confirmation.
+These graphics presets actually change the emulator launch options, and never override RAM16 or RAM Diet.
+Shader Compilation Inputs show the files under `_Build\\static-precompile` with safe/review/locked cleanup labels. Compatible incremental updates store a content fingerprint to avoid re-precompiling after timestamp-only changes; source-free packages continue to use native status checks. Settings are saved in `launcher-settings.json`. Update Missing Shaders opens a progress window with completed/running/waiting shard counts, elapsed time, live log, and safe stop request; it keeps incremental merge and stores a per-run log under `_Build/run-logs/launcher-shader-updates`. The launcher is packaged with Electron; a standalone
+.NET Framework installer is not required. Windows may display an unsigned-app warning on first start.
 "Up to 120 fps" (off by default) lets the game render up to 120 frames a second instead of the
 console's 60 where the PC is fast enough: play keeps its speed, and movies, menus and loading screens
 stay at 60.

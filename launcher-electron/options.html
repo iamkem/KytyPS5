@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Demon's Souls - Setup</title><link rel="stylesheet" href="style.css"></head>
+<body class="options-screen"><div class="options-shell">
+<header class="options-banner"><img src="kytyart://main/pic0" alt="" draggable="false"><span>DEMON'S SOULS</span><small>SETUP</small></header>
+<nav class="tab-strip" role="tablist" aria-label="Settings">
+<button data-tab="display" class="current" role="tab" aria-selected="true">Display</button>
+<button data-tab="graphics" role="tab" aria-selected="false">Graphics</button>
+<button data-tab="advanced" role="tab" aria-selected="false">Advanced</button>
+<button data-tab="cache" role="tab" aria-selected="false">Shader Cache</button>
+</nav>
+<div class="tab-content">
+<section id="tab-display" class="tab-panel active" role="tabpanel"><div class="two-columns">
+<div class="field-col">
+ <label class="field"><span>Window Mode</span><select id="window-mode"><option value="windowed">Windowed</option><option value="fullscreen">Fullscreen</option></select></label>
+ <label class="field"><span>Display Resolution</span><select id="resolution"></select></label>
+ <label class="field"><span>Aspect Ratio</span><select id="ratio"><option value="16:9">16:9</option><option value="21:9">21:9</option><option value="32:9">32:9</option></select></label>
+ <div class="field-divider"></div>
+ <label class="field"><span>HDR</span><input type="checkbox" id="hdr"></label>
+ <label class="field"><span>VSync</span><select id="vsync"><option value="false">Off</option><option value="true">On</option></select></label>
+ <label class="field"><span>Frame Rate Limit</span><select id="fps120"><option value="false">60 FPS</option><option value="true">Up to 120 FPS</option></select></label>
+</div>
+<div class="field-col right-col">
+ <p class="settings-heading">Screen & presentation</p>
+ <p class="muted-info">These settings affect the displayed image, not the internal rendering resolution.</p>
+ <p class="muted-info">To adjust frame rate and image detail, open the <strong>Graphics</strong> tab.</p>
+ <p class="muted-info">The game defaults to 2560×1440 in a window. HDR requires HDR enabled in Windows.</p>
+</div></div></section>
+<section id="tab-graphics" class="tab-panel" role="tabpanel"><div class="two-columns">
+<div class="field-col">
+ <label class="field"><span>Preset</span><select id="preset"><option value="Ultra Performance">Ultra Performance · 900p</option><option value="Performance">Performance · 1080p</option><option value="Balanced">Balanced · 1152p</option><option value="Quality">Quality · 1440p</option><option value="Custom">Custom</option></select></label>
+ <label class="field"><span>Upscale Method</span><select id="upscaler"><option value="dlss">NVIDIA DLSS</option><option value="">Game TAA</option></select></label>
+ <label class="field"><span>Render Resolution</span><select id="render-height"><option value="900">900p</option><option value="1080">1080p</option><option value="1152">1152p</option><option value="1296">1296p</option><option value="1440">1440p</option><option value="1512">1512p</option><option value="1620">1620p</option><option value="1800">1800p</option><option value="2160">2160p</option></select></label>
+ <label class="field"><span>Graphics Detail</span><select id="quality"><option value="lowest">Lowest</option><option value="low">Low</option><option value="standard">Standard (PS5)</option></select></label>
+ <label class="field"><span>Game Output</span><select id="output"><option value="4k">4K (PS5)</option><option value="1080p">1080p</option></select></label>
+</div><div class="field-col right-col">
+ <label class="field"><span>Frame Generation</span><select id="framegen"><option value="0">Off</option><option value="2">2x</option><option value="3">3x</option><option value="4">4x</option><option value="5">5x</option><option value="6">6x</option></select></label>
+ <label class="field"><span>FSR Frame Generation</span><select id="fsr"><option value="false">Off</option><option value="true">On</option></select></label>
+ <label class="field"><span>Low Latency</span><select id="lowlatency"><option value="true">On</option><option value="false">Off</option></select></label>
+ <label class="field"><span>FPS Overlay</span><select id="hud"><option value="0">Off</option><option value="1">FPS</option><option value="2">Detailed</option></select></label>
+ <div class="field-divider"></div><p class="muted-info"><strong>Current profile</strong><br><span id="preset-summary"></span></p>
+ <p class="muted-info">Presets set the actual internal render resolution and detail. Existing RAM16 and memory settings are never changed.</p>
+</div></div></section>
+<section id="tab-advanced" class="tab-panel" role="tabpanel"><div class="two-columns">
+<div class="field-col">
+ <label class="field"><span>Memory Optimization</span><select id="ram-diet"><option value="true">On</option><option value="false">Off</option></select></label>
+ <label class="field"><span>Extended Memory Mode</span><select id="ram16"><option value="true">On</option><option value="false">Off</option></select></label>
+ <label class="field"><span>GPU Cache Budget</span><select id="vram"><option value="0">Auto</option><option value="10240">10 GB</option><option value="8192">8 GB</option><option value="6144">6 GB</option><option value="4096">4 GB</option></select></label>
+ <label class="field"><span>Compatibility Guard</span><select id="redzone"><option value="true">On</option><option value="false">Off</option></select></label>
+ <label class="field"><span>Safe GPU Mode</span><select id="safegpu"><option value="false">Off</option><option value="true">On (slower)</option></select></label>
+ <label class="field"><span>Enable Mods</span><input type="checkbox" id="cheats"></label>
+ <label class="field"><span>Console Language</span><select id="language"></select></label>
+</div><div class="field-col right-col">
+ <div class="path-field"><span>Game Installation</span><div class="path-controls"><input id="game-path" readonly><button id="browse-game">Browse…</button></div></div>
+ <div class="path-field"><span>NVIDIA Streamline SDK</span><div class="path-controls"><input id="sdk-path" readonly><button id="browse-sdk">Browse…</button></div></div>
+ <div class="field-divider"></div>
+ <div class="maintenance"><p>Maintenance</p><button id="shader-update">Update Missing Shaders</button><button id="shader-view-progress">View Progress…</button><button id="logs">Open Logs</button><button id="export-hints">Export Diagnostics</button></div>
+ <p class="muted-info">Manage old and current shader caches in the <strong>Shader Cache</strong> tab.</p>
+</div></div></section>
+<section id="tab-cache" class="tab-panel" role="tabpanel">
+ <div class="cache-screen">
+  <div class="cache-top"><div><strong>Shader Cache Versions</strong><p id="cache-status">Checking current GPU/driver cache…</p></div><div class="cache-actions"><button id="cache-snapshot">Save Current Version…</button><button id="cache-refresh">Refresh</button></div></div>
+  <div class="cache-update-line"><span id="cache-update-status">Shader update: Not started</span><button id="cache-update-view">View Progress…</button></div>
+  <div id="cache-list" class="cache-list"><p>Reading cache folders…</p></div>
+  <div class="cache-foot"><span id="cache-selected">No cache selected</span><button id="cache-delete" disabled>Move selected to Recycle Bin…</button></div>
+  <div class="cache-inputs-actions"><strong>Shader Compilation Inputs</strong><span>Separate from GPU pipeline cache</span><button id="inputs-remove" disabled>Remove selected inputs…</button></div>
+  <p class="cache-note">GREEN — safe to clean: interrupted archived shards. AMBER — saved backups: review before removal. GREY — active / performance data: protected, cannot select. Nothing is deleted automatically.</p>
+ </div>
+</section>
+</div>
+<footer class="options-actions"><button id="reset" class="quiet-button">Reset Graphics</button><div class="spacer"></div><span id="message" role="status"></span><button id="ok" class="primary-button">OK</button><button id="cancel">Cancel</button></footer>
+</div><script src="options.js"></script></body></html>

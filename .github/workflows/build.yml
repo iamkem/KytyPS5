@@ -96,10 +96,20 @@ jobs:
           call build-windows.cmd kyty_emulator || exit /b 1
           call build-windows.cmd kyty_shader_precompile || exit /b 1
 
-      # The settings window (launcher-windows: WPF on .NET Framework 4.7.2, part of Windows 10 and 11).
-      - name: Build launcher
+      - name: Setup Node for Electron launcher
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: launcher-electron/package-lock.json
+
+      - name: Build Electron launcher
         shell: cmd
-        run: call launcher-windows\build.cmd || exit /b 1
+        run: |
+          cd launcher-electron || exit /b 1
+          call npm ci --no-audit --no-fund || exit /b 1
+          call npm test || exit /b 1
+          call npm run build || exit /b 1
 
       - name: Package
         shell: pwsh
@@ -110,7 +120,8 @@ jobs:
           $out = "_Build\package\$env:PACKAGE"
           New-Item -ItemType Directory -Force $out | Out-Null
           Copy-Item "$build\kyty_emulator.exe", "$build\kyty_shader_precompile.exe", "$build\libwinpthread-1.dll",
-            _Build\launcher\KytyLauncher.exe, run-windows.ps1, precompile-windows.ps1, launcher.ps1, launcher.cmd, LICENSE $out
+            run-windows.ps1, precompile-windows.ps1, launcher.cmd, LICENSE $out
+          Copy-Item _Build\demons-souls-launcher\DemonsSoulsLauncher-win32-x64 "$out\Launcher" -Recurse
           Copy-Item LICENSES $out -Recurse
           Copy-Item run-windows.json "$out\launch.json"
           Copy-Item docs\PORTABLE-README.md "$out\README.md"
@@ -124,6 +135,7 @@ jobs:
           New-Item -ItemType Directory -Force $states | Out-Null
           Copy-Item tools\local\static-precompile\pass-states.json, tools\local\static-precompile\hints-*.hints $states
           Copy-Item tools\local\static-precompile\files-*.files $states -ErrorAction SilentlyContinue
+          Copy-Item tools\local\static-precompile\cache-fingerprint.ps1 $states
           # The VC++ runtime next to the exe (Microsoft's redistributable files): nothing to install.
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
           $crt = Get-Item "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT" | Where-Object { $_.Parent.Parent.Name -match '^\d+\.' } |
@@ -182,7 +194,7 @@ jobs:
           # A tag's own release, else a new tag named after the package at this commit.
           tag="$GITHUB_REF_NAME"
           [ "$GITHUB_REF_TYPE" = tag ] || tag="$PACKAGE"
-          notes="Windows x64 build of ${GITHUB_SHA::8} for Demon's Souls (PPSA01341, versions 01.007.000 and 01.005.000). Unzip it and double-click KytyLauncher.exe (or run.cmd); the README.md inside explains the rest."
+          notes="Windows x64 build of ${GITHUB_SHA::8} for Demon's Souls (PPSA01341, versions 01.007.000 and 01.005.000). Unzip it and double-click launcher.cmd (or run.cmd); the README.md inside explains the rest."
           # The notes of this build (what changed, the per-PC shader caches, frame rates), when the commit has them.
           if [ -s notes/docs/RELEASE-NOTES.md ]; then notes="$(printf '%s\n\n%s' "$notes" "$(cat notes/docs/RELEASE-NOTES.md)")"; fi
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then

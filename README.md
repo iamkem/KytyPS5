@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> **Personal Windows launcher — Demon's Souls PC.** This fork uses a custom Electron launcher with the installed game's icon, real resolution-based presets, shader cache version management and live precompile progress. Open `launcher.cmd` or build `launcher-electron` with `npm ci` and `npm run build`. The former WPF launcher (`launcher-windows`) and PowerShell launcher UIs have been removed; `run-windows.ps1` and `precompile-windows.ps1` remain as required emulator backends. See [the personalized launcher guide](launcher-electron/README.md).
+>
 > [!NOTE]
 > **This fork is tuned for Demon's Souls.** Its renderer, shader and memory paths are optimized for
 > **Demon's Souls (PS5, PPSA01341), game versions 1.07 (01.007.000) and 1.05 (01.005.000)**: both are
@@ -9,7 +12,7 @@
 > browsers while playing, see [#50](https://github.com/chenxiao07/KytyPS5/issues/50)) and 8 GB of video memory (the test PC limited to 8 GB: most areas 40–60
 > fps, the heaviest 10–35).
 >
-> **Download: [the latest release](https://github.com/chenxiao07/KytyPS5/releases/latest)**, a Windows
+> **This fork's Windows build: [GitHub Actions](https://github.com/iamkem/KytyPS5/actions/workflows/build.yml)**, a Windows
 > x64 build made by GitHub Actions from this branch. Unzip it, double-click `launcher.cmd` (or
 > `run.cmd`) and choose the game folder (the one with `eboot.bin`); the `README.md` inside explains
 > the rest. Use only a game dump made from your own copy of the game. To build it yourself, see

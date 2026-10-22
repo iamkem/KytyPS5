@@ -1,12 +1,18 @@
 @echo off
-rem The settings window: KytyLauncher.exe (launcher-windows; in a source tree _Build\launcher), else the older launcher.ps1.
-rem (Windows PowerShell by its path: with its folder missing from PATH, "powershell" was unknown, issue #55.)
-if exist "%~dp0KytyLauncher.exe" (
-	start "" "%~dp0KytyLauncher.exe"
-	exit /b 0
+setlocal
+rem Personal Demon's Souls PC launcher. Backend scripts remain required by Electron.
+set "ROOT=%~dp0"
+if exist "%ROOT%_Build\demons-souls-launcher\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe" (
+  start "" "%ROOT%_Build\demons-souls-launcher\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe"
+  exit /b 0
 )
-if exist "%~dp0_Build\launcher\KytyLauncher.exe" (
-	start "" "%~dp0_Build\launcher\KytyLauncher.exe"
-	exit /b 0
+if exist "%ROOT%Launcher\DemonsSoulsLauncher.exe" (
+  start "" "%ROOT%Launcher\DemonsSoulsLauncher.exe"
+  exit /b 0
 )
-start "" "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0launcher.ps1"
+echo Demon's Souls PC Launcher not found. To build it:
+echo   cd launcher-electron
+echo   npm ci
+echo   npm run build
+pause
+exit /b 1
