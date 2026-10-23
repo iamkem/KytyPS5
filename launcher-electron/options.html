@@ -46,7 +46,7 @@
  <label class="field"><span>Memory Optimization</span><select id="ram-diet"><option value="true">On</option><option value="false">Off</option></select></label>
  <label class="field"><span>Extended Memory Mode</span><select id="ram16"><option value="true">On</option><option value="false">Off</option></select></label>
  <label class="field"><span>RAM Safety Mode (experimental)</span><select id="ram-safety"><option value="false">Off (current behavior)</option><option value="true">On (Stutter Guard + adaptive RAM protection)</option></select></label>
- <label class="field"><span>Experimental Texture Offload</span><select id="texture-offload"><option value="false">Off (recommended until validated)</option><option value="true">On (reclaim duplicate guest texture RAM — risk)</option></select></label>
+ <label class="field"><span>Texture Residency Probe (diagnostic)</span><select id="texture-offload"><option value="false">Off (recommended for gameplay)</option><option value="true">On (measure duplicate pages; no discard)</option></select></label>
  <label class="field"><span>GPU Cache Budget</span><select id="vram"><option value="0">Auto</option><option value="10240">10 GB</option><option value="8192">8 GB</option><option value="6144">6 GB</option><option value="4096">4 GB</option></select></label>
  <label class="field"><span>Compatibility Guard</span><select id="redzone"><option value="true">On</option><option value="false">Off</option></select></label>
  <label class="field"><span>Safe GPU Mode</span><select id="safegpu"><option value="false">Off</option><option value="true">On (slower)</option></select></label>
@@ -60,7 +60,7 @@
  <div class="field-divider"></div>
  <div class="maintenance"><p>Steam integration</p><button id="steam-setup">Set Up Steam…</button><p id="steam-hint" class="muted-info">Play as a Non-Steam Game from Steam. The launcher exits with the game; Steamworks Rich Presence is unavailable.</p></div>
  <p class="muted-info">RAM Safety Mode (v11 Stutter Guard): protects recently remade GPU pipelines from repeat eviction, reduces eviction bursts, and pauses shader prefetch below 4 GB RAM available. Emergency retirement still operates below 1 GB. This is experimental: RAM may grow and stutter may remain; never a guaranteed BSOD fix. Keep the known-good launcher v9 if stability is in doubt.</p>
- <p class="muted-info">Stage 5 Texture Offload (opt-in, requires RAM Safety + RAM16): compares GPU texture downloads byte-for-byte with guest data before discarding duplicate RAM pages when free RAM falls below ~1/3 of total. It can cause stalls, MISS/LOST texture bytes or crashes on some access paths; never use for unattended gameplay or without backed-up saves. Turn Off if any missing textures, freezes or warnings occur. Neither the savings nor safety is validated yet.</p>
+ <p class="muted-info">Stage 5 Texture Residency Probe (opt-in, RAM Safety + RAM16): instruments clean GPU sampled textures below ~1/3 available RAM. It protects and observes guest memory accesses but NEVER discards texture data, so it cannot reduce RAM by itself. Windows file-backed DiscardVirtualMemory failed validation (1224), so unsafe offload is blocked. Probe may still increase page faults/stutter; keep Off for ordinary gameplay.</p>
  <p class="muted-info">Manage old and current shader caches in the <strong>Shader Cache</strong> tab.</p>
 </div></div></section>
 <section id="tab-mods" class="tab-panel" role="tabpanel">

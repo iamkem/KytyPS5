@@ -76,10 +76,10 @@ struct PipelinePolicy {
     }
 }
 
-// Experimental duplicate-texture reclamation: begin checking verified GPU-only
-// texture copies before physical RAM is exhausted, with 2 GiB hysteresis.
-// No texture page is discarded by this policy; existing OffloadScan performs
-// GPU-download byte-for-byte validation and retains the restore/watch guards.
+// Stage 5 texture residency diagnostic gating (and possible future lossless
+// duplicate reclamation): begin tracking cold texture copies when RAM is low.
+// This policy never discards data. The v12 launcher only enables Probe mode;
+// Windows file-backed DiscardVirtualMemory failed validation on this host.
 [[nodiscard]] constexpr bool TextureOffloadScan(bool previous, uint64_t available, uint64_t total) {
     if (available == 0 || total == 0) return false; // unknown: do not discard
     const uint64_t start = std::clamp(total / 3, 4 * GiB, 10 * GiB);

@@ -53,12 +53,24 @@ inline Mode GetMode() {
 #if defined(_WIN32)
 	static const Mode mode = [] {
 		const char* offload = std::getenv("KYTY_TEXTURE_OFFLOAD");
-		if (offload != nullptr && offload[0] != '\0') {
-			if (offload[0] == '1') return Mode::Offload;
-		} else if (const auto ram = LocalPlatform::PhysicalMemory(); ram != 0 && ram <= (uint64_t {20} << 30u)) {
+		const char* probe = std::getenv("KYTY_TEXTURE_OFFLOAD_PROBE");
+		const bool requested = offload != nullptr && offload[0] != '\0';
+		const bool wants_offload = requested
+		    ? offload[0] == '1'
+		    : (LocalPlatform::PhysicalMemory() != 0 && LocalPlatform::PhysicalMemory() <= (uint64_t {20} << 30u));
+		if (wants_offload) {
+			// Stage 5 gate: Windows DiscardVirtualMemory returned ERROR_USER_MAPPED_FILE
+			// (1224) against our sparse file-backed section; the test's mapped bytes
+			// were zero afterward. Do NOT discard live guest data from this mapping.
+			const char* backing = std::getenv("KYTY_BACKING_FILE");
+			const bool file_backing = backing != nullptr && backing[0] != '\0' &&
+			                          !(backing[0] == '0' && backing[1] == '\0');
+			if (file_backing) {
+				std::printf("Texture offload: BLOCKED on file-backed guest mapping (DiscardVirtualMemory unsafe); probe-only available\n");
+				return probe != nullptr && probe[0] == '1' ? Mode::Probe : Mode::Off;
+			}
 			return Mode::Offload;
 		}
-		const char* probe = std::getenv("KYTY_TEXTURE_OFFLOAD_PROBE");
 		return probe != nullptr && probe[0] == '1' ? Mode::Probe : Mode::Off;
 	}();
 	return mode;

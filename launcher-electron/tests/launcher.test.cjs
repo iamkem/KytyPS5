@@ -33,7 +33,7 @@ test('RAM Safety Mode is opt-in and preserves the known-good defaults',{skip:!lo
   assert.match(probe.stdout,/KYTY_SHADER_PREFETCH_THREADS=1/);
   assert.match(probe.stdout,/KYTY_SHADER_FOLLOW_THREADS=1/);
 });
-test('Experimental Texture Offload is separately opt-in, gated by RAM Safety and RAM16',{skip:!localReady},()=>{
+test('Texture Residency Probe is separately opt-in and never enables destructive offload',{skip:!localReady},()=>{
   assert.equal(lib.clean({}).texture_offload,false);
   const prior=lib.loadSettings(root);
   const rootBase={...prior,ram_safety:true,ram16_backing:true,texture_offload:true};
@@ -44,9 +44,10 @@ test('Experimental Texture Offload is separately opt-in, gated by RAM Safety and
   }
   const active=lib.buildPlayArgs(root,rootBase);
   const vars=active.args[active.args.indexOf('-Set')+1];
-  assert.match(vars,/KYTY_TEXTURE_OFFLOAD=1/);
+  assert.match(vars,/KYTY_TEXTURE_OFFLOAD=0/);
+  assert.match(vars,/KYTY_TEXTURE_OFFLOAD_PROBE=1/);
   assert.match(vars,/KYTY_TEXTURE_OFFLOAD_ADAPTIVE=1/);
-  assert.match(vars,/KYTY_TEXTURE_OFFLOAD_CHECK_MB=8/);
+  assert.doesNotMatch(vars,/KYTY_TEXTURE_OFFLOAD=1/);
   assert.throws(()=>lib.buildPlayArgs(root,{...rootBase,ram16_backing:false}),/requires Extended Memory Mode/);
   const disabled=lib.buildPlayArgs(root,{...rootBase,texture_offload:false});
   assert.doesNotMatch(disabled.args[disabled.args.indexOf('-Set')+1],/KYTY_TEXTURE_OFFLOAD=/);

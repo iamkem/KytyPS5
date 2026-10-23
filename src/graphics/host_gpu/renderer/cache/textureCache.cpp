@@ -4014,13 +4014,13 @@ void TextureCache::OffloadScan(uint64_t tick) {
 	}
 	if (tick % 120 != 0) return;
 	// Stage 5 (opt-in): the Windows exception/restore hooks are set up at startup,
-	// but no NEW texture bytes are discarded while physical RAM remains ample.
+	// but new probe / offload candidates are not taken while physical RAM remains ample.
 	// Continue draining/restoring all already-offloaded textures on every flip.
 	static const bool adaptive_offload = [] {
 		const char* flag = std::getenv("KYTY_TEXTURE_OFFLOAD_ADAPTIVE");
 		return flag != nullptr && std::string_view(flag) == "1";
 	}();
-	if (offload && adaptive_offload) {
+	if (adaptive_offload) {
 		static bool was_active = false; // GPU render thread owns OffloadScan
 		const uint64_t available = LocalPlatform::AvailablePhysicalMemory();
 		const uint64_t total = LocalPlatform::PhysicalMemory();

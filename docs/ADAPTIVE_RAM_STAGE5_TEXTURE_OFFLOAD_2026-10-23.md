@@ -1,51 +1,43 @@
-# Stage 5 — Adaptive Texture Offload (2026-10-23)
+# Stage 5 — Texture Residency / Discard Gate (2026-10-23, safety correction)
 
-## Why this experiment exists
+## Evidence and outcome
 
-On 24 GiB Windows host, gameplay v11 Stutter Guard (log `_Build/run-logs/20261023-140733-513.out.log`) reduced the total synchronous pipeline remakes from v10's 1,431 to 507, but available RAM still declined near 1 GiB. It reached 1,036 MiB in shader prefetch samples, and process working set exceeded 13 GiB. GPU video-memory usage was ~6.3 GiB of 10.9 GiB budget; reducing VRAM budget is not a direct solution.
+Stage 4 v11 lowered synchronous pipeline remakes from v10's 1,431 to 507, but the 24 GiB Windows system continued to approach 100% physical RAM utilization. Recent gameplay had >13 GiB Kyty working set, guest RAM backing size 13,824 MiB, GPU VRAM around 6.3 GiB of ~10.9 GiB available budget.
 
-The repo contains a preexisting `TextureOffload` implementation. It is normally enabled by default only on Windows hosts with <=20 GiB RAM, and was OFF on this 24 GiB system. The existing source documents a prior 16 GiB machine test which freed up to ~2 GiB on a 1-1 / Stonefang / 1-1 route; that is **not** an expected or measured result for this computer.
+The codebase includes GPU-verified sampled-texture offload, disabled by default above 20 GiB RAM. It can in principle reclaim duplicate texture pages, but **do not enable its destructive path with RAM16 file backing**.
 
-## What v12 adds
+### Critical Windows isolated smoke result
 
-Isolated native build `_Build/windows-ram-offload/kyty_emulator.exe`; isolated launcher `_Build/demons-souls-launcher-v12/DemonsSoulsLauncher-win32-x64/DemonsSoulsLauncher.exe`.
+The standalone `tools/local/memory-pressure-mapped-discard-smoke.cpp` created a sparse 64 KiB file-backed mapping on the user's Windows host and tested DiscardVirtualMemory:
+- File-backed map: `STAGE5_FILE_MAPPING_DISCARD_STATUS=1224` (error), bytes read `00,00` after a prior pattern was written.
+- Private VirtualAlloc mapping: `STAGE5_PRIVATE_ALLOCATION_DISCARD_STATUS=0` (success).
 
-Options > Advanced:
-- **RAM Safety Mode** = On (Stage 1-4 safeguards; Stage 4 Stutter Guard remains).
-- **Extended Memory Mode (RAM16)** = On.
-- **Experimental Texture Offload** = **Off by default**. Opt-in On is a high-risk experiment to recover duplicate guest texture RAM.
+A failure code together with zeroed data is **not a safe or supported discard-and-recover guarantee**. It may be influenced by the specific mapping, filesystem, and platform; it is nevertheless sufficient to **FAIL the safety gate**. Microsoft's DiscardVirtualMemory docs state memory contents become undefined upon successful discard and that a failed operation is not supposed to alter the contents; this empirical mismatch makes the operation unsuitable for live guest memory pending deeper analysis. This test is isolated and did not touch game data.
 
-The launcher sends the following flags only when both RAM Safety and RAM16 are enabled and Texture Offload is explicitly On:
-- `KYTY_TEXTURE_OFFLOAD=1`
+The existing `TextureOffload::OnFault` implementation also explicitly records `MISSED` accesses returning zeros to threads which cannot wait for GPU restoration and `LOST` events when a source image cannot be downloaded. Thus we do not claim its destruction/restore path is lossless.
+
+## v12 safety-corrected diagnostic candidate
+
+Native: `_Build/windows-ram-offload/kyty_emulator.exe`.
+Launcher: `_Build/demons-souls-launcher-v12/DemonsSoulsLauncher-win32-x64/DemonsSoulsLauncher.exe`.
+
+The Advanced UI now offers **Texture Residency Probe** rather than destructive offload. Default **Off**. When explicitly enabled with RAM Safety and RAM16, launcher sends:
+- `KYTY_TEXTURE_OFFLOAD=0`
+- `KYTY_TEXTURE_OFFLOAD_PROBE=1`
 - `KYTY_TEXTURE_OFFLOAD_ADAPTIVE=1`
-- `KYTY_TEXTURE_OFFLOAD_CHECK_MB=8`
 
-The native logic calls the existing texture-offload code, but scans for new candidates **only when physical available RAM declines below ~1/3 of total** (approximately 8 GiB on this machine). It pauses new candidate scans after recovery beyond roughly 10 GiB (2 GiB hysteresis). It continues to drain / restore already offloaded pages even if candidate scans are paused. At each 120 flips, at most 8 MiB of new image downloads are scheduled for equivalence checks, compared with the preexisting 16 MiB default.
+Probe only marks candidate clean sampled-texture pages and counts subsequent accesses; it does not discard data or save physical RAM. It begins scans below about one third of physical RAM available (about 8 GiB on a 24 GiB machine), pauses new probes after recovery beyond ~10 GiB. Existing instrumented pages get normal read-watch cleanup. The mode may cause additional page faults and render stalls, so do not enable for normal gameplay.
 
-Eligibility is the existing source's conservative GPU/guest-byte comparison: clean, sampled-only images with no GPU/CPU dirty bytes, whole valid mapped ranges, and a byte-for-byte GPU download match. Duplicate host pages can then be discarded (the GPU image becomes their sole temporary copy), and are restored on a later access.
+Additionally the Win32 `TextureOffload::GetMode` now blocks **destructive offload whenever `KYTY_BACKING_FILE` is active**. Explicit direct `KYTY_TEXTURE_OFFLOAD=1` no longer bypasses this protection in a file-backed launch. If `KYTY_TEXTURE_OFFLOAD_PROBE=1` is also present, it is downgraded to non-discarding Probe; otherwise mode Off. The existing <20 GiB default is similarly blocked for file-backed launch.
 
-## Critical safety limits
+The existing Stutter Guard, Adaptive RAM Stage 1-4, guest file writeback, DLSS and FG are not changed. v11 native binary/launcher and existing configuration, saved data, shader caches, Steam setup and `launcher.cmd` remain intact.
 
-**Not yet safe for production gameplay.** The preexisting offload implementation can produce `Texture offload: MISSED ... (zeros until restored)` when a thread cannot wait for GPU restoration; it can also produce `Texture offload: LOST ...` if the image can no longer be downloaded. Both are unacceptable for a final lossless memory optimization. Page faults, GPU download checks, restore stalls, data corruption and a BSOD are possible. This experiment cannot be claimed as a fix for Windows MEMORY_MANAGEMENT bugchecks. The user must not run unattended stress tests, and should back up save data before trying.
+## Verification gates
 
-**Stop immediately if** the log shows `MISSED`, `LOST`, texture corruption, a hang, or RAM falls below 1 GiB. Leave the setting Off for ordinary gameplay. Windows/SSD I/O due to Stage 3 normal file writeback can also add stutter.
+1. Isolated mapping discard smoke: demonstrates the failure (status 1224) and blocks destructive path.
+2. `memory-pressure-policy-test.cpp`: validates 8 GiB entry/10 GiB release and no transition with unknown RAM.
+3. Native Windows build and 49/49-ish launcher tests, packaged UI smoke and DryRun: final validation.
+4. No gameplay launched; **no proven physical RAM savings**. Probe is diagnostic only.
+5. Next engineering requirement for a true leap: implement a lossless page residency/writeback mechanism compatible with aliased file-backed sections; address nonwaiting GPU-restore reads and source-image lifetime, and validate data coherency under concurrent CPU/GPU accesses before enabling destructive offload.
 
-To roll back: use Launcher v11 executable with its normal RAM Safety Mode, or turn Texture Offload Off in v12. v9/v10 and all game/save/shader files are untouched.
-
-## Validation
-
-- Native `memory-pressure-policy-test.cpp` Windows compile/tests: PASS, including 8/10 GiB hysteresis and unknown-memory disabled policy.
-- Native isolated Windows build+link: PASS.
-- Launcher unit tests: 48 tests; rerun after new native executable exists.
-- Launcher packaged UI smoke: pending final run.
-- Real gameplay: **not executed**. No savings, FPS improvements, no-error claims, or crash prevention established.
-
-## Run acceptance with matched short scene
-
-Use v11 as the gameplay baseline. On a separate short controlled session in v12 (only after saving a backup), turn Experimental Texture Offload On. Compare Windows physical available RAM, emulator working set, disk activity and stutter in the same location. Logs should show `Texture offload: on`, `Texture offload: adaptive scan started`, and 30-second periodic report `Texture offload: N MiB out of RAM now`, `restores`, `missed`, `lost`. **Any missed/lost page fails the safety gate**, regardless of potential RAM savings.
-
-If this cannot pass the gate, revert to v11; further optimization needs fixing unsafe nonwaiting restore and image-lifetime paths, not merely tuning RAM thresholds.
-
-### Local checkout note
-
-The native binary also includes unrelated preexisting uncommitted modifications `staticPrecompile.inc`, `vma.cpp`, and `local-platform.{cpp,h}`; these were neither committed nor overwritten by Stage 5.
+Recommendation: continue using v11 for play. v12 is a protected instrumentation candidate to research duplicate texture residency, **not** a faster/leaner release.

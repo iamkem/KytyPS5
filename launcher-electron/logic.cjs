@@ -184,10 +184,10 @@ function buildPlayArgs(root, raw) {
       'KYTY_SHADER_PREFETCH_THREADS=1','KYTY_SHADER_FOLLOW_THREADS=1');
   }
   if (s.ram_safety && s.texture_offload) {
-    // High-risk opt-in: GPU-verified texture bytes may be discarded from guest RAM.
-    // Do not enable without RAM16/file backing; OffloadScan begins only under 1/3 RAM free.
-    if (!s.ram16_backing) throw Error('Experimental Texture Offload requires Extended Memory Mode (RAM16) On.');
-    vars.push('KYTY_TEXTURE_OFFLOAD=1','KYTY_TEXTURE_OFFLOAD_ADAPTIVE=1','KYTY_TEXTURE_OFFLOAD_CHECK_MB=8');
+    // RAM16 uses a file-mapped section. DiscardVirtualMemory is unsafe for this
+    // backing on the tested Windows host: enable *probe only*, never discard.
+    if (!s.ram16_backing) throw Error('Texture Residency Probe requires Extended Memory Mode (RAM16) On.');
+    vars.push('KYTY_TEXTURE_OFFLOAD=0','KYTY_TEXTURE_OFFLOAD_PROBE=1','KYTY_TEXTURE_OFFLOAD_ADAPTIVE=1');
   }
   if (s.vram_budget_mb) vars.push('KYTY_VRAM_BUDGET_MB='+s.vram_budget_mb);
   if (vars.length) args.push('-Set',vars.join(','));
