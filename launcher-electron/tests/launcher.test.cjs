@@ -55,6 +55,32 @@ test('Texture Residency Probe is separately opt-in and never enables destructive
   assert.doesNotMatch(legacy.args[legacy.args.indexOf('-Set')+1],/KYTY_TEXTURE_OFFLOAD=/);
   assert.equal(lib.applyPreset(rootBase,'Balanced').texture_offload,true);
 });
+test('Chenxiao07 PAGE_GUARD BSOD mitigation uses a separate, opt-in native candidate',{skip:!localReady},()=>{
+  const base=lib.loadSettings(root);
+  assert.equal(lib.clean({}).chenxiao_guard,false);
+  const trialSettings={...base,ram_safety:true,ram16_backing:true,stage7_ram:false,texture_offload:false,chenxiao_guard:true};
+  const trial=lib.buildPlayArgs(root,trialSettings);
+  assert.match(trial.args[trial.args.indexOf('-Exe')+1],/windows-chenxiao-guard.*kyty_emulator\.exe$/i);
+  const env=trial.args[trial.args.indexOf('-Set')+1];
+  assert.match(env,/KYTY_READ_GUARD=1/);
+  assert.match(env,/KYTY_ADAPTIVE_RAM=1/);
+  assert.match(env,/KYTY_BACKING_FILE=1/);
+  assert.match(env,/KYTY_TEXTURE_OFFLOAD_PROBE=0/);
+  assert.doesNotMatch(env,/KYTY_STAGE7_RAM=1/);
+  assert.throws(()=>lib.buildPlayArgs(root,{...trialSettings,ram_safety:false}),/Chenxiao BSOD Guard requires/);
+  assert.throws(()=>lib.buildPlayArgs(root,{...trialSettings,ram16_backing:false}),/Chenxiao BSOD Guard requires/);
+  assert.throws(()=>lib.buildPlayArgs(root,{...trialSettings,texture_offload:true}),/Chenxiao BSOD Guard requires/);
+  assert.throws(()=>lib.buildPlayArgs(root,{...trialSettings,stage7_ram:true}),/Chenxiao BSOD Guard requires/);
+  const off=lib.buildPlayArgs(root,{...trialSettings,chenxiao_guard:false});
+  assert.doesNotMatch(off.args[off.args.indexOf('-Set')+1],/KYTY_READ_GUARD=/);
+  assert.match(off.args[off.args.indexOf('-Exe')+1],/windows-ram-offload.*kyty_emulator\.exe$/i);
+  assert.equal(lib.applyPreset(trialSettings,'Balanced').chenxiao_guard,true);
+  const probe=spawnSync(trial.command,[...trial.args,'-DryRun'],
+    {cwd:root,encoding:'utf8',windowsHide:true,timeout:40000});
+  assert.equal(probe.status,0,probe.stderr||probe.stdout);
+  assert.match(probe.stdout,/KYTY_READ_GUARD=1/);
+  assert.match(probe.stdout,/windows-chenxiao-guard/i);
+});
 test('Stage 7 residency mode is isolated and stays opt-in',{skip:!localReady},()=>{
   const base=lib.loadSettings(root);
   assert.equal(lib.clean({}).stage7_ram,false);

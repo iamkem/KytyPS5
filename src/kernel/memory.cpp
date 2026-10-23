@@ -6,6 +6,7 @@
 #include "fresh-memory.h"
 
 #include "common/assert.h"
+#include "common/hostException.h"
 #include "common/logging/log.h"
 #include "common/magicEnum.h"
 #include "common/stringUtils.h"
@@ -71,6 +72,13 @@ extern "C" {
 // mapping its other parts again (GuestBackingStore::UnmapOne); 2: parked no-access (a stray access faults, for
 // debugging). 0: views with nothing parked yet are split at once, as before (a view holding parked ranges keeps parking).
 [[gnu::used]] volatile std::atomic_uint32_t kyty_local_park_unmaps {1};
+// chenxiao07 f53b4497 + 91a15d6c: PAGE_GUARD replaces NOACCESS for
+// guest mapped section pages on Windows. Enabled by default; KYTY_READ_GUARD=0
+// restores the previous protection policy. Not a RAM usage reduction.
+[[gnu::used]] volatile std::atomic_uint32_t kyty_local_read_guard {[] {
+	const char* value = std::getenv("KYTY_READ_GUARD");
+	return value != nullptr && value[0] == '0' ? 0u : 1u;
+}()};
 }
 
 namespace VirtualMemory = Common::VirtualMemory;
@@ -1464,9 +1472,38 @@ bool TryPrepareHostOverwrite(uint64_t vaddr, uint64_t size) {
 	       g_gpu_resources->InvalidateMemoryForWrite(vaddr, size);
 }
 
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+// Guard was consumed by Windows: re-arm it inside the synchronized guest
+// address space, then dispatch the same guest fault that NOACCESS raised.
+static bool ArmReadGuard(uint64_t address) {
+	if (g_guest_address_space == nullptr || !IsGpuAddressRange(address, 1) ||
+	    !g_guest_address_space->ArmReadGuard(address)) return false;
+	LiveCounters::Add(LiveCounters::ReadGuardFaults);
+	return true;
+}
+
+// A restored guard can outlive a concurrent page-watcher protection change;
+// reconcile it with the tracker/guest permissions if it remains armed.
+static void SettleReadGuard(uint64_t address) {
+	constexpr uint64_t Page = 0x1000;
+	MEMORY_BASIC_INFORMATION info {};
+	if (VirtualQuery(reinterpret_cast<const void*>(address & ~(Page - 1)), &info, sizeof(info)) != sizeof(info) ||
+	    (info.Protect & PAGE_GUARD) == 0 || g_gpu_resources == nullptr) return;
+	LiveCounters::Add(LiveCounters::ReadGuardSettles);
+	g_gpu_resources->SettleProtection(address);
+}
+#endif
+
 void InstallGpuResources(Graphics::GpuResourceManager* resources) noexcept {
 	EXIT_IF(resources != nullptr && g_gpu_resources != nullptr);
 	g_gpu_resources = resources;
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+	if (resources != nullptr) {
+		Common::HostException::SetReadGuardHandlers(ArmReadGuard, SettleReadGuard);
+		if (kyty_local_read_guard.load(std::memory_order_relaxed) != 0)
+			std::printf("Memory: guest pages kept from reads by guard pages (KYTY_READ_GUARD)\n");
+	}
+#endif
 }
 
 bool IsGuestMappedAfterChanges(uint64_t vaddr) {
@@ -1515,6 +1552,23 @@ static bool IsInPrtAperture(uint64_t address, uint64_t size = 1) {
 	}
 
 	return false;
+}
+
+// Restore the guest's own mapping permissions, preserving read, write and
+// execute bits. PageManager calls this only under its page lock.
+bool RestoreGuestProtection(uint64_t vaddr, uint64_t size) {
+	VirtualRanges::Range range {};
+	if (g_virtual_ranges == nullptr || g_guest_address_space == nullptr ||
+	    !g_virtual_ranges->Query(vaddr, 0, &range) || range.start > vaddr ||
+	    size > range.start + range.size - vaddr) return false;
+	const bool read = (range.protection & PROT_CPU_READ) != 0;
+	const bool write = (range.protection & PROT_CPU_WRITE) != 0;
+	const auto mode = (range.protection & PROT_CPU_EXEC) != 0
+	                      ? (write ? VirtualMemory::Mode::ExecuteReadWrite
+	                               : read ? VirtualMemory::Mode::ExecuteRead : VirtualMemory::Mode::Execute)
+	                      : (write ? VirtualMemory::Mode::ReadWrite
+	                               : read ? VirtualMemory::Mode::Read : VirtualMemory::Mode::NoAccess);
+	return g_guest_address_space->ProtectTransient(vaddr, size, mode);
 }
 
 bool RestoreGuestWritable(uint64_t vaddr, uint64_t size) {

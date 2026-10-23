@@ -616,6 +616,19 @@ bool PageManager::RestoreIfUnwatched(uint64_t vaddr) noexcept {
 	return Libs::LibKernel::Memory::RestoreGuestWritable(PageStart(vaddr), PAGE_SIZE);
 }
 
+void PageManager::SettleProtection(uint64_t vaddr) noexcept {
+	auto* region = m_impl->FindRegion(vaddr);
+	if (region == nullptr) {
+		(void)Libs::LibKernel::Memory::RestoreGuestProtection(PageStart(vaddr), PAGE_SIZE);
+		return;
+	}
+	SpinGuard lock(region->lock);
+	const auto perms = Impl::PermsOf(*region, (vaddr % REGION_SIZE) / PAGE_SIZE);
+	if (perms == READ_WRITE_PROTECTION)
+		(void)Libs::LibKernel::Memory::RestoreGuestProtection(PageStart(vaddr), PAGE_SIZE);
+	else Impl::ProtectHost(PageStart(vaddr), PAGE_SIZE, perms);
+}
+
 bool PageManager::WatchedSpan(uint64_t vaddr, uint64_t size, uint64_t* first, uint64_t* end) const noexcept {
 	bool           any  = false;
 	const uint64_t stop = UINT64_MAX - vaddr < size ? UINT64_MAX : vaddr + size;

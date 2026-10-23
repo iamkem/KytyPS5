@@ -1429,7 +1429,8 @@ private:
 			case VirtualMemory::Mode::ExecuteWrite:
 			case VirtualMemory::Mode::ExecuteReadWrite: return PAGE_EXECUTE_READWRITE;
 			case VirtualMemory::Mode::NoAccess:
-			default: return PAGE_NOACCESS;
+			default: return kyty_local_read_guard.load(std::memory_order_relaxed) != 0
+			                     ? PAGE_GUARD | PAGE_READONLY : PAGE_NOACCESS;
 		}
 	}
 
@@ -1784,6 +1785,24 @@ public:
 		ExclusiveLock lock(m_mutex);
 		return ProtectMappedUnlocked(vaddr, size, mode);
 	}
+
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+	// Re-arm a guard page after a read-guard fault, synchronized with guest map/unmap.
+	// Private guest stacks are deliberately not accepted as backing mappings.
+	bool ArmReadGuard(uint64_t vaddr) {
+		constexpr uint64_t Page = 0x1000;
+		const uint64_t page = vaddr & ~(Page - 1);
+		std::shared_lock lock(m_mutex);
+		WaitNotBusy(lock, page, Page);
+		auto it = m_mapped.upper_bound(page);
+		if (it == m_mapped.begin()) return false;
+		--it;
+		const auto& region = it->second;
+		if (region.type != MappingType::Backing || page + Page > region.vaddr + region.size) return false;
+		DWORD old = 0;
+		return VirtualProtect(reinterpret_cast<void*>(page), Page, PAGE_GUARD | PAGE_READONLY, &old) != 0;
+	}
+#endif
 
 	// Returns once no change of the address space is under way (Memory::WriteBacking: a partial unmap's views mapped
 	// again).
@@ -2218,11 +2237,24 @@ private:
 			const auto  range_end   = std::min(end, region.vaddr + region.size);
 			if (range_start >= range_end) continue;
 			LiveTrace::SlowOsCallScope slow(LiveTrace::OsProtect, range_start, range_end - range_start);
-			if (!VirtualMemory::Protect(range_start, range_end - range_start, mode)) {
+			if (!ProtectView(range_start, range_end - range_start, mode, region.type)) {
 				return false;
 			}
 		}
 		return true;
+	}
+
+	// Read guards are only valid for backed file views: private memory and
+	// guest stacks continue to use their original protection semantics.
+	static bool ProtectView(uint64_t vaddr, uint64_t size, VirtualMemory::Mode mode, MappingType type) {
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+		if (mode == VirtualMemory::Mode::NoAccess && type == MappingType::Backing &&
+		    kyty_local_read_guard.load(std::memory_order_relaxed) != 0) {
+			DWORD old = 0;
+			return VirtualProtect(reinterpret_cast<void*>(vaddr), size, PAGE_GUARD | PAGE_READONLY, &old) != 0;
+		}
+#endif
+		return VirtualMemory::Protect(vaddr, size, mode);
 	}
 
 	// A free entry consumed with its placeholder split later (SplitPlaceholders, outside the lock).

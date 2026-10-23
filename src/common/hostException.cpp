@@ -97,6 +97,14 @@ void SetGuardPageHandler(GuardPageHandler handler) {
 	g_guard_page_handler.store(handler, std::memory_order_release);
 }
 
+static std::atomic<ReadGuardArm>    g_read_guard_arm {nullptr};
+static std::atomic<ReadGuardSettle> g_read_guard_settle {nullptr};
+
+void SetReadGuardHandlers(ReadGuardArm arm, ReadGuardSettle settle) {
+	g_read_guard_settle.store(settle, std::memory_order_release);
+	g_read_guard_arm.store(arm, std::memory_order_release);
+}
+
 static std::atomic<ProbeHandler> g_probe_handler {nullptr};
 
 void SetProbeHandler(ProbeHandler handler) {
@@ -222,24 +230,37 @@ static void InstallFatalReports() {
 static LONG WINAPI ExceptionFilter(PEXCEPTION_POINTERS exception) noexcept {
 	auto* exception_record = exception->ExceptionRecord;
 
+	// An access guard on a mapped guest page is delivered as the access
+	// violation that the original NOACCESS protection would have raised.
+	bool read_guard = false;
 	if (exception_record->ExceptionCode == STATUS_GUARD_PAGE_VIOLATION) {
-		const auto handler = g_guard_page_handler.load(std::memory_order_acquire);
-		return handler != nullptr && exception_record->NumberParameters >= 2 &&
-		               handler(exception_record->ExceptionInformation[1], exception->ContextRecord)
-		           ? EXCEPTION_CONTINUE_EXECUTION
-		           : EXCEPTION_CONTINUE_SEARCH;
+		const auto arm = g_read_guard_arm.load(std::memory_order_acquire);
+		if (arm != nullptr && exception_record->NumberParameters >= 2 && arm(exception_record->ExceptionInformation[1])) {
+			read_guard = true;
+		} else {
+			const auto handler = g_guard_page_handler.load(std::memory_order_acquire);
+			return handler != nullptr && exception_record->NumberParameters >= 2 &&
+			               handler(exception_record->ExceptionInformation[1], exception->ContextRecord)
+			           ? EXCEPTION_CONTINUE_EXECUTION
+			           : EXCEPTION_CONTINUE_SEARCH;
+		}
 	}
+	const bool access_violation = exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION || read_guard;
+	const auto served = [&] {
+		if (read_guard) g_read_guard_settle.load(std::memory_order_acquire)(exception_record->ExceptionInformation[1]);
+		return EXCEPTION_CONTINUE_EXECUTION;
+	};
 
-	// A guarded copy reached a page without access: it stops there (never the guest's fault).
-	if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && ResumeGuardedCopy(exception->ContextRecord)) {
+	// Guarded copy stops as before, without settling the freshly rearmed guard.
+	if (access_violation && ResumeGuardedCopy(exception->ContextRecord)) {
 		return EXCEPTION_CONTINUE_EXECUTION;
 	}
-	if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && exception_record->NumberParameters >= 2) {
+	if (access_violation && exception_record->NumberParameters >= 2) {
 		if (const auto probe = g_probe_handler.load(std::memory_order_acquire);
 		    probe != nullptr &&
 		    probe(exception_record->ExceptionInformation[1], exception->ContextRecord->Rip, exception->ContextRecord,
 		          exception_record->ExceptionInformation[0] == 1))
-			return EXCEPTION_CONTINUE_EXECUTION;
+			return served();
 	}
 
 	if (exception_record->ExceptionCode == DBG_PRINTEXCEPTION_C ||
@@ -257,7 +278,7 @@ static LONG WINAPI ExceptionFilter(PEXCEPTION_POINTERS exception) noexcept {
 	info.native_code       = exception_record->ExceptionCode;
 	info.native_context    = exception->ContextRecord;
 
-	if (exception_record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+	if (access_violation) {
 		info.type = ExceptionType::AccessViolation;
 		switch (exception_record->ExceptionInformation[0]) {
 			case 0: info.access_violation_type = AccessViolationType::Read; break;
@@ -291,7 +312,7 @@ static LONG WINAPI ExceptionFilter(PEXCEPTION_POINTERS exception) noexcept {
 
 	const auto handler = g_handler.load(std::memory_order_acquire);
 	if (handler != nullptr && handler(info)) {
-		return EXCEPTION_CONTINUE_EXECUTION;
+		return served();
 	}
 	return EXCEPTION_CONTINUE_SEARCH;
 }

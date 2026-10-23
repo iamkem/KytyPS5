@@ -44,6 +44,12 @@ using GuardPageHandler = bool (*)(uint64_t address, void* native_context);
 
 void SetGuardPageHandler(GuardPageHandler handler);
 
+// Windows guest-page read guard: handle fault as a virtual access violation,
+// then settle the protection according to current GPU/guest page watchers.
+using ReadGuardArm    = bool (*)(uint64_t address);
+using ReadGuardSettle = void (*)(uint64_t address);
+void SetReadGuardHandlers(ReadGuardArm arm, ReadGuardSettle settle);
+
 // Windows, the texture offload (src/local/texture-offload.h): an access violation outside the guest's fault handling is
 // first offered to this handler (the touched address, the faulting instruction, whether it wrote); true resumes the
 // thread.
