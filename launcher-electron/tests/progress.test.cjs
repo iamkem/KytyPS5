@@ -99,3 +99,34 @@ test('Older precompile runners get a durable resume marker instead of an unsuppo
     assert.match(fs.readFileSync(marker,'utf8'),/resume pending/);
   }finally{cleanup();}
 });
+
+test('Recover interrupted old shader precompile despite subsequent false up-to-date probes',()=>{
+  const {dir,cleanup}=temp();
+  try{
+    const logDir=path.join(dir,'_Build','run-logs','launcher-shader-updates');
+    fs.mkdirSync(logDir,{recursive:true});
+    fs.writeFileSync(path.join(logDir,'shader-update-2026-10-23T14-46-13-365Z-old.log'),
+      '[stdout] 01:12:50 shards: 438 done, 4 running, 601 waiting (0 split)\n'+
+      '[stdout] update: stop requested; finishing active shards\n'+
+      '[stdout] done in 01:13:26: partially merged binaries\n'+
+      '[stdout] update: stopped safely; previously completed shards merged\n');
+    fs.writeFileSync(path.join(logDir,'shader-update-2026-10-23T17-24-03-808Z-probe.log'),
+      '[stdout] cache: VALID for current GPU/driver and shaders; nothing to precompile.\n');
+    fs.writeFileSync(path.join(logDir,'last-state.json'),
+      JSON.stringify({status:'up-to-date',phase:'Already up to date',percent:100,lines:[]}));
+    const recovered=new ShaderProgress(dir).snapshot();
+    assert.equal(recovered.status,'interrupted');
+    assert.equal(recovered.percent,null);
+    assert.match(recovered.phase,/resume required/i);
+
+    // A real full completion supersedes the old interrupted job.
+    fs.writeFileSync(path.join(logDir,'shader-update-2026-10-23T18-40-00-000Z-done.log'),
+      '[stdout] stage: merging completed shader shards\n[stdout] done in 00:28:00: cache updated\n');
+    assert.equal(new ShaderProgress(dir).snapshot().status,'up-to-date');
+
+    // A durable resume-required marker overrides cached success.
+    fs.mkdirSync(path.join(dir,'_PipelineCache','static'),{recursive:true});
+    fs.writeFileSync(path.join(dir,'_PipelineCache','static','PPSA01341_01.007.000.resume-required'),'incomplete\n');
+    assert.equal(new ShaderProgress(dir).snapshot().status,'interrupted');
+  }finally{cleanup();}
+});

@@ -503,6 +503,7 @@ while ($first.Count -or $second.Count -or $running.Count) {
 	}
 }
 $env:KYTY_PRECOMPILE_CLAIMS = $null
+# Late cancellation must not write a success feature stamp or fingerprint.
 if ($StopSignal -and (Test-Path -LiteralPath $StopSignal)) { $stopped = $true }
 # (-Quick: what the store held of the other shaders stays. Recorded play that could not be gathered: the pipelines an
 # earlier run made for it stay too - pruned to the seeds alone, the game compiled them all again while playing.)

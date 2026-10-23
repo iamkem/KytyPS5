@@ -32,6 +32,34 @@ function parseLine(state, raw){
   return state;
 }
 function stateCopy(s){return {...s,shards:s.shards?{...s.shards}:null,lines:[...s.lines]};}
+// Old precompiler versions could stamp partial caches even when their final log
+// ended with 'update: stopped safely'. Ignore subsequent one-line 'up-to-date'
+// probes: those don't prove the missing shards were ever compiled.
+function latestSubstantiveShaderRun(logDir){
+  if(!fs.existsSync(logDir))return null;
+  let entries;
+  try{
+    entries=fs.readdirSync(logDir).filter(n=>/^shader-update-.*\.log$/.test(n)).sort().reverse();
+  }catch{return null;}
+  for(const name of entries.slice(0,80)){
+    const file=path.join(logDir,name);
+    try{
+      const stat=fs.statSync(file);
+      if(!stat.isFile() || stat.size<=0 || stat.size>8*1024*1024)continue;
+      const data=fs.readFileSync(file,'utf8');
+      const stopped=/update:\s*(?:stop requested|stopped safely)/i.test(data);
+      if(stopped)return 'interrupted';
+      if(/^\[stdout\]\s*done in\s+[^\r\n]+$/mi.test(data))return 'completed';
+      // 'cache: VALID' is not sufficient after a partial completed-stamp.
+    }catch{}
+  }
+  return null;
+}
+function hasResumeMarker(root){
+  const dir=path.join(root,'_PipelineCache','static');
+  try{return fs.readdirSync(dir).some(n=>/\.resume-required$/i.test(n));}
+  catch{return false;}
+}
 class ShaderProgress extends EventEmitter{
   constructor(root){
     super();this.root=root;this.child=null;this.stopFile=null;
@@ -49,6 +77,13 @@ class ShaderProgress extends EventEmitter{
             phase:'Previous session interrupted — Update Missing Shaders will resume unfinished shards',lines:(saved.lines||[]).slice(-170)};
         }
       }catch{}
+    }
+    if(['idle','up-to-date','completed'].includes(this.state.status) &&
+       (hasResumeMarker(this.root) || latestSubstantiveShaderRun(this.logDir)==='interrupted')){
+      this.state.status='interrupted';
+      this.state.phase='Previous shader update stopped with shards remaining — resume required';
+      this.state.percent=null;
+      this.state.shards=null;
     }
   }
   snapshot(){return stateCopy(this.state);}
