@@ -12,7 +12,7 @@ const sizes={'16:9':['1280x720','1920x1080','2560x1440','3840x2160'],
  '21:9':['2560x1080','3440x1440','3840x1600','5120x2160'],
  '32:9':['3840x1080','5120x1440','7680x2160']};
 const boolKeys={'vsync':'vsync','fps120':'fps120','lowlatency':'lowlatency',
- 'fsr':'fsr','fps30':'fps30','upstream-latest':'upstream_latest','ram-diet':'ram_diet','ram16':'ram16_backing','ram-safety':'ram_safety','texture-offload':'texture_offload','stage7-ram':'stage7_ram','chenxiao-guard':'chenxiao_guard','redzone':'redzone','safegpu':'safegpu'};
+ 'fsr':'fsr','fps30':'fps30','ram-diet':'ram_diet','ram16':'ram16_backing','ram-safety':'ram_safety','redzone':'redzone','safegpu':'safegpu'};
 const numberKeys={'framegen':'framegen','hud':'hud','vram':'vram_budget_mb','language':'language'};
 const plainKeys={'ratio':'ratio','resolution':'resolution','upscaler':'upscaler','dlss-model':'dlss_model','gpu-choice':'gpu','output':'output','quality':'quality'};
 function set(id,value){const el=$(id);if(el.type==='checkbox')el.checked=Boolean(value);else el.value=String(value);}
@@ -33,7 +33,7 @@ function fill(){
   for(const [id,key] of Object.entries(numberKeys))set(id,s[key]);
   for(const [id,key] of Object.entries(plainKeys))set(id,s[key]);
   set('hdr',s.hdr);set('cheats',s.cheats);
-  for(const option of $('render-height').options)option.disabled=(s.output==='1080p'&&Number(option.value)>1080) || (Number(option.value)<720 && (!s.upstream_latest || s.output!=='1080p'));
+  for(const option of $('render-height').options)option.disabled=(s.output==='1080p'&&Number(option.value)>1080) || (Number(option.value)<720 && (s.output!=='1080p'));
   set('render-height',s.upscaler==='dlss'||s.upscaler==='fsr'?s.render_dlss:s.render);
   set('game-path',s.game);set('sdk-path',s.streamline);
   set('preset',activePreset(s));
@@ -59,6 +59,8 @@ function update(id){
  if(state.output==='1080p'){
   state.render=Math.min(state.render,1080);
   state.render_dlss=Math.min(state.render_dlss,1080);
+ }else if(state.output==='1440p'){
+  state.render_dlss=Math.min(state.render_dlss,1440);
  }
  fill();
 }

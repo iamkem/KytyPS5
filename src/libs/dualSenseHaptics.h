@@ -22,6 +22,18 @@
 //   KYTY_DUALSENSE_HAPTICS_GAIN=<float>         applied to the vibration samples (default: 4.0 - the
 //                                  actuators are felt rather than heard, and at 1.0 they are barely
 //                                  there in play)
+//   KYTY_DUALSENSE_VIBRATION_MOTOR_GAIN=<float> 0..16 (default: 2.0). How hard the rumble motors are
+//                                  driven from a block's peak: 0 leaves the work to the actuators
+//                                  (faint), 2.0 is the mainline's reference, 4 doubles it. Strength is
+//                                  taste - lower it when a spell's whole charge buzzes, raise it when a
+//                                  hit is barely there. Same key in dualsense-haptics.txt: motor_gain=
+//   KYTY_DUALSENSE_VIBRATION_MOTOR_MS=<1..500>   how long each drive report lasts (default: 60; SDL2 reads
+//   KYTY_DUALSENSE_VIBRATION_MOTOR_DECAY=<0..1)  0 as "no expiry", so 1 is the smallest; the fade also sends
+//                                  an explicit stop when it reaches its floor) and how fast the hold falls
+//                                  between reports (default: 0.6; must be below 1 - at exactly 1 it never
+//                                  reaches the floor). Together, the tail of a hit: a hit is one block,
+//                                  so the default ends it in about 250 ms; longer or slower reads as a
+//                                  hit that keeps rumbling. Same keys: motor_ms=, motor_decay=
 //   KYTY_DUALSENSE_SPEAKER_CHANNELS=01|23|all   the same for the pad speaker (default: 01)
 //   KYTY_DUALSENSE_SPEAKER_GAIN=<float>         0..64, default 1.0 (unity). The pad's own amplifier and
 //                                  the +6 dB preamp below make the speaker audible; digital gain on

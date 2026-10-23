@@ -56,3 +56,46 @@ test('Stop request writes a signal and waits for cooperative completion, never k
     assert.equal(fs.existsSync(result.logFile),true);
   }finally{cleanup();}
 });
+
+test('Interrupted legacy shader run forces resume and exit 130 never means complete',async()=>{
+  const {dir,cleanup}=temp();
+  try{
+    const logDir=path.join(dir,'_Build','run-logs','launcher-shader-updates');
+    fs.mkdirSync(logDir,{recursive:true});
+    fs.writeFileSync(path.join(logDir,'last-state.json'),JSON.stringify({status:'interrupted',startedAt:new Date().toISOString(),lines:[]}));
+    fs.writeFileSync(path.join(dir,'precompile-windows.ps1'),'[switch]$ForceResume');
+    const manager=new ShaderProgress(dir);
+    assert.equal(manager.snapshot().status,'interrupted');
+    const done=waitFinish(manager);
+    const code="console.log(process.argv.includes('-ForceResume')?'FORCE_RESUME_PRESENT':'FORCE_RESUME_MISSING');console.log('update: stopped safely');process.exit(130)";
+    manager.run({command:process.execPath,args:['-e',code,'--','-Incremental']});
+    const result=await done;
+    assert.equal(result.status,'stopped');
+    assert.equal(result.percent,null);
+    assert.match(fs.readFileSync(result.logFile,'utf8'),/FORCE_RESUME_PRESENT/);
+    assert.equal(new ShaderProgress(dir).snapshot().status,'stopped');
+  }finally{cleanup();}
+});
+
+test('Older precompile runners get a durable resume marker instead of an unsupported flag',async()=>{
+  const {dir,cleanup}=temp();
+  try{
+    const logDir=path.join(dir,'_Build','run-logs','launcher-shader-updates');
+    const game=path.join(dir,'installed-game');
+    fs.mkdirSync(logDir,{recursive:true});
+    fs.mkdirSync(path.join(game,'sce_sys'),{recursive:true});
+    fs.writeFileSync(path.join(game,'sce_sys','param.json'),JSON.stringify({titleId:'PPSA01341',contentVersion:'01.007.000'}));
+    fs.writeFileSync(path.join(logDir,'last-state.json'),JSON.stringify({status:'stopped',startedAt:new Date().toISOString(),lines:[]}));
+    fs.writeFileSync(path.join(dir,'precompile-windows.ps1'),'param([switch]$Incremental)');
+    const manager=new ShaderProgress(dir);
+    const done=waitFinish(manager);
+    const code="console.log(process.argv.includes('-ForceResume')?'UNSUPPORTED_FLAG':'RESUME_MARKER');process.exit(130)";
+    manager.run({command:process.execPath,args:['-e',code,'--','-Incremental','-Game',game]});
+    const result=await done;
+    assert.equal(result.status,'stopped');
+    assert.match(fs.readFileSync(result.logFile,'utf8'),/RESUME_MARKER/);
+    const marker=path.join(dir,'_PipelineCache','static','PPSA01341_01.007.000.resume-required');
+    assert.equal(fs.existsSync(marker),true);
+    assert.match(fs.readFileSync(marker,'utf8'),/resume pending/);
+  }finally{cleanup();}
+});

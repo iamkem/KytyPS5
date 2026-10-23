@@ -10,20 +10,20 @@ Discord RPC remains separately configured by `launcher-settings.json` and works 
 
 ## One-time setup (explicit user action in Steam)
 
-1. Build and open launcher v9 with root `launcher.cmd`.
+1. Open the latest packaged Launcher in `_Build/latest/launcher/DemonsSoulsLauncher-win32-x64/`.
 2. Open **Options → Advanced → Set Up Steam…**.
 3. Open Steam, then **Games → Add a Non-Steam Game to My Library → Browse**. Choose the *packaged* EXE listed in the setup dialog (not `launcher.cmd` and not `kyty_emulator.exe`).
 4. In the Steam shortcut's **Properties**, set its display name to **Demon's Souls Remake PC (KytyPS5)** (or your preferred name).
 5. Set **Launch Options** to `--steam-game`. The setup dialog offers a **Copy Launch Options** action. **Start In** should be the EXE's parent directory; Steam normally fills this when browsing.
 6. Start the shortcut **from your Steam Library**. The launcher uses the **already-saved** `launcher-settings.json` without rewriting it, starts the normal `run-windows.ps1 -Follow` game session, and stays hidden while the game is running. When that session ends, the launcher exits and Steam can clear its Non-Steam Game activity.
 
-The packaged v9 path is:
+The only supported packaged Launcher path is:
 
 ```text
-<repository-root>\_Build\demons-souls-launcher-v9\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe
+<repository-root>\_Build\latest\launcher\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe
 ```
 
-**Existing Steam shortcuts targeting v8 must be updated manually to the v9 EXE** (Steam > Properties > Target and Start In) to see the new graphics controls. If the repository is moved or the launcher is upgraded, review the target in Steam shortcut properties. The Steam setup dialog automatically points to the newest existing packaged v9/v8/v7/v6.
+**Existing Steam shortcuts targeting older versioned builds must be updated manually** (Steam > Properties > Target and Start In) to this single latest executable. The setup dialog points only to the latest package.
 
 ## Safety & behavior
 

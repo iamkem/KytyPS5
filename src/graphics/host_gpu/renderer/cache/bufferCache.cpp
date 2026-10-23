@@ -11,7 +11,6 @@
 #include "readback-queue.h"
 #include "fresh-memory.h"
 #include "texture-offload.h"
-#include "stage7-resource-policy.h"
 #ifdef KYTY_LOCAL_VULKAN_RECORDING
 #include "vulkan-recording.h"
 #endif
@@ -93,97 +92,30 @@ struct NativeBufferDownloadScope {
 	~NativeBufferDownloadScope() { --native_buffer_download_depth; }
 };
 
+// KYTY_STAGING_MB: the staging ring's size in MiB, 16 or more (pinned system memory; default
+// 512). Uploads past it take a temporary buffer or the large path (KYTY_STAGING_STATS=1 counts
+// them), and TextureCache's ChunkedUploadMin (256 MiB) does not follow it: below 512, images just
+// under 256 MiB take most of the ring.
+uint64_t StagingRingSize() {
+	const char* value = std::getenv("KYTY_STAGING_MB");
+	const auto  mib = value != nullptr && value[0] != '\0' ? std::strtoull(value, nullptr, 10) : 0;
+	return (mib >= 16 ? mib : 512) * MiB;
+}
+
 } // namespace
-
-// Stage 7: chunked staging only for ordinary buffer copies. Large images
-// keep the continuous legacy buffer and the original image protection path.
-class ChunkedUploadStaging {
-public:
-    ChunkedUploadStaging(GraphicContext& graphics, CommandScheduler& scheduler)
-        : m_graphics(graphics), m_scheduler(scheduler) {}
-
-    std::pair<Buffer*, uint64_t> Copy(const uint8_t* source, uint64_t size) {
-        for (auto& block: m_blocks) {
-            auto [data, offset] = block.ring->Map(size, 4, false);
-            if (data == nullptr) continue;
-            std::memcpy(data, source, static_cast<size_t>(size));
-            block.ring->Commit();
-            block.last_tick = m_scheduler.CurrentTick();
-            block.last_use = Clock::now();
-            return {block.ring.get(), offset};
-        }
-        // Never force a GPU wait from this speculative pool. Fallback to
-        // the original StreamBuffer (which owns the correct Vulkan barriers).
-        if (m_blocks.size() >= 12) return {nullptr, 0};
-        Block block;
-        block.ring = std::make_unique<StreamBuffer>(m_graphics, m_scheduler,
-                                                     MemoryUsage::Upload, Stage7::ChunkBytes);
-        auto [data, offset] = block.ring->Map(size, 4, false);
-        if (data == nullptr) return {nullptr, 0};
-        std::memcpy(data, source, static_cast<size_t>(size));
-        block.ring->Commit();
-        block.last_tick = m_scheduler.CurrentTick();
-        block.last_use = Clock::now();
-        auto* buffer = block.ring.get();
-        m_blocks.emplace_back(std::move(block));
-        ++m_created;
-        return {buffer, offset};
-    }
-
-    void Trim(uint64_t available, uint64_t physical) {
-        const auto now = Clock::now();
-        const auto warm = Stage7::WarmChunks(available, physical);
-        for (size_t index = m_blocks.size(); index-- > 0 && m_blocks.size() > warm;) {
-            const auto& block = m_blocks[index];
-            const auto age = std::chrono::duration_cast<std::chrono::seconds>(now - block.last_use).count();
-            if (!Stage7::RetireChunk(static_cast<uint64_t>(std::max<int64_t>(age, 0)),
-                                     m_scheduler.IsFree(block.last_tick), m_blocks.size(), warm)) continue;
-            m_blocks.erase(m_blocks.begin() + static_cast<std::ptrdiff_t>(index));
-            ++m_trimmed;
-        }
-    }
-
-    void Log(uint64_t tick) const {
-        if (tick % 600 != 0) return;
-        std::printf("Stage7 staging: blocks=%zu created=%zu trimmed=%zu cached_mib=%zu main_ring_mib=256\n",
-                    m_blocks.size(), m_created, m_trimmed, m_blocks.size() * 16);
-    }
-
-private:
-    using Clock = std::chrono::steady_clock;
-    struct Block {
-        std::unique_ptr<StreamBuffer> ring;
-        Clock::time_point last_use = Clock::now();
-        uint64_t last_tick = 0;
-    };
-    GraphicContext& m_graphics;
-    CommandScheduler& m_scheduler;
-    std::vector<Block> m_blocks;
-    size_t m_created = 0, m_trimmed = 0;
-};
 
 void BufferCache::WriteDataBuffer(Buffer& buffer, uint64_t address, const void* source,
                                   uint64_t size) {
-	auto* bytes = static_cast<const uint8_t*>(source);
-	while (size != 0) {
-		const auto chunk = std::min(size, Stage7::Enabled() ? Stage7::ChunkBytes : m_staging_buffer.Size());
-		Buffer* staging = nullptr;
-		uint64_t offset = 0;
-		if (Stage7::Enabled()) {
-			if (!m_chunked_upload)
-				m_chunked_upload = std::make_unique<ChunkedUploadStaging>(m_graphics, m_scheduler);
-			std::tie(staging, offset) = m_chunked_upload->Copy(bytes, chunk);
-		}
-		if (staging == nullptr) {
-			staging = &m_staging_buffer;
-			offset = m_staging_buffer.Copy(bytes, chunk, 4);
-		}
-		buffer.CopyFrom(m_scheduler.Current(), *staging, offset, buffer.Offset(address),
-		                chunk, vk::AccessFlagBits::eHostWrite);
-		bytes += chunk;
-		address += chunk;
-		size -= chunk;
-	}
+    auto* bytes = static_cast<const uint8_t*>(source);
+    while (size != 0) {
+        const auto chunk = std::min(size, m_staging_buffer.Size());
+        const auto offset = m_staging_buffer.Copy(bytes, chunk, 4);
+        buffer.CopyFrom(m_scheduler.Current(), m_staging_buffer, offset, buffer.Offset(address),
+                        chunk, vk::AccessFlagBits::eHostWrite);
+        bytes += chunk;
+        address += chunk;
+        size -= chunk;
+    }
 }
 
 struct BufferCache::DownloadCopy {
@@ -736,6 +668,9 @@ void BufferCache::FinishGuestReadback(size_t slot, bool detach) {
 		return;
 	}
 	if (!request->copied.load(std::memory_order_acquire)) {
+		// (The game thread copying may wait for an asynchronous texture restore under its
+		// write-back, which nothing would submit while this thread waits.)
+		TextureOffload::SubmitRestores();
 		LiveCensus::Scope census(LiveCensus::ReadbackWait, reinterpret_cast<uint64_t>(__builtin_return_address(0)),
 		                         reinterpret_cast<uint64_t>(__builtin_return_address(1)));
 		LiveCensus::WaitScope waiting(LiveCensus::WaitReadback);
@@ -1412,7 +1347,7 @@ BufferCache::BufferCache(GraphicContext& graphics, CommandScheduler& scheduler,
       m_lod_stats_buffer(graphics, scheduler, MemoryUsage::Stream, 0, AllFlags, 256 * 16),
       m_memory_tracker(page_manager),
       m_staging_buffer(graphics, scheduler, MemoryUsage::Upload,
-                       Stage7::MainUploadBytes(Stage7::Enabled()),
+                       StagingRingSize(),
                        AllFlags | vk::BufferUsageFlagBits::eShaderDeviceAddress),
       m_stream_buffer(graphics, scheduler, MemoryUsage::Stream, 64 * MiB),
       m_host_shader_upload(graphics, scheduler, MemoryUsage::Upload, 64 * MiB),
@@ -2269,6 +2204,7 @@ vk::Buffer BufferCache::UploadCopies(Buffer& buffer, std::span<vk::BufferCopy> c
 		return staging_ring.Handle();
 	}
 
+	m_staging_buffer.NoteBypass(total_size);
 	auto temporary = std::make_unique<Buffer>(m_graphics, m_scheduler, MemoryUsage::Upload, 0,
 	                                         vk::BufferUsageFlagBits::eTransferSrc, total_size);
 	for (const auto& copy: copies) {
@@ -2434,6 +2370,7 @@ std::pair<Buffer*, uint64_t> BufferCache::ObtainBufferForImage(uint64_t vaddr, u
 	// fills a staging-sized piece at a time (a temporary buffer past that) and only where memory is mapped.
 	if (size > m_staging_buffer.Size()) {
 		path = "large";
+		m_staging_buffer.NoteBypass(size);
 		ApplyImageProtects();
 		return ObtainBuffer(vaddr, size, false, false);
 	}
@@ -2464,10 +2401,6 @@ std::pair<Buffer*, uint64_t> BufferCache::ObtainBufferForImage(uint64_t vaddr, u
 		     m_resources != nullptr && m_resources->IsMapped(vaddr, size), prt_failure);
 	}
 	m_staging_buffer.Commit();
-	if (Stage7::Enabled() && backing_ok) {
-		m_stage7_guest_replay_bytes += size;
-		++m_stage7_guest_replay_count;
-	}
 	return {&m_staging_buffer, stage_offset};
 }
 
@@ -2503,7 +2436,6 @@ bool BufferCache::PushImageStagingCopies(uint8_t* staging, uint64_t vaddr, uint6
 	QueueImageProtects({&whole, 1}, true);
 	if (const auto* source = Libs::LibKernel::Memory::TryGetBackingPointer(vaddr, size)) {
 		PushUploadCopy(staging, source, size, vaddr);
-		if (Stage7::Enabled()) {m_stage7_guest_replay_bytes += size; ++m_stage7_guest_replay_count;}
 		return true;
 	}
 	if (Libs::LibKernel::Memory::TryGetBackingPieces(vaddr, size, m_backing_pieces)) {
@@ -2513,7 +2445,6 @@ bool BufferCache::PushImageStagingCopies(uint8_t* staging, uint64_t vaddr, uint6
 			PushUploadCopy(staging + offset, piece, bytes, vaddr + offset);
 			offset += bytes;
 		}
-		if (Stage7::Enabled()) {m_stage7_guest_replay_bytes += size; ++m_stage7_guest_replay_count;}
 		return true;
 	}
 	// Partly unmapped (a texture pool with released layers): the worker reads the mapped
@@ -2719,7 +2650,13 @@ void BufferCache::CopyGuestMemory(uint64_t dst_vaddr, uint64_t src_vaddr, uint64
 	// chain makes every frame, on the frame's critical path: 0.39 ms on this thread alone, 0.24 ms shared at Latria).
 	const auto page_of = [&](uint64_t at) { return (dst_vaddr + at) / TRACKER_PAGE_SIZE - dst_vaddr / TRACKER_PAGE_SIZE; };
 	thread_local std::vector<uint8_t> differs;
-	const bool parallel = size >= ParallelCompareBytes;
+	// (Helpers only over pages no read faults on: a helper's fault waits for this thread's
+	// readback, which waits for the helpers. CopyBuffer left out GPU-modified memory, so these are
+	// the pages the texture and file offloads hold; this thread compares such a copy alone, its own
+	// faults are served here. Only this thread adds holds.)
+	const bool parallel = size >= ParallelCompareBytes &&
+	                      !Libs::LibKernel::Memory::ReadFaults(dst_vaddr, size) &&
+	                      !Libs::LibKernel::Memory::ReadFaults(src_vaddr, size);
 	if (parallel) {
 		struct Compare {
 			uint64_t dst, src, size;
@@ -2822,8 +2759,7 @@ void BufferCache::RetireStaleBuffers(uint64_t tick) {
 	if (tick % 30 == 0) {
 		uint64_t video = 0, budget = 0;
 		const bool gpu_pressure = m_graphics.QueryLocalVideoMemory(&video, &budget) && video >= m_critical_gc_memory;
-		m_retire_pressure = Stage7::HostBufferPressure(Stage7::Enabled(), gpu_pressure,
-		    LocalPlatform::AvailablePhysicalMemory(), LocalPlatform::PhysicalMemory());
+		m_retire_pressure = gpu_pressure;
 	}
 	if (tick <= MinTicks) return;
 	const bool pressure = m_retire_pressure;
@@ -2953,6 +2889,7 @@ void BufferCache::Defragment(uint64_t tick) {
 		for (auto* allocation: m_defrag_free_later) vmaFreeMemory(allocator, allocation);
 		m_defrag_free_later.clear();
 		m_defrag_moves.clear();
+		ReleaseBufferFrees();
 		if (result != VK_INCOMPLETE) EndDefragmentation();
 		return;
 	}
@@ -2961,13 +2898,17 @@ void BufferCache::Defragment(uint64_t tick) {
 		BufferCache*                          cache;
 		std::chrono::steady_clock::time_point start;
 		bool                                  on    = false;
-		uint32_t                              moves = 0;
+		uint32_t                              moves = 0, ignored = 0;
+		double                                begin_ms = 0;
 		~Timed() {
 			if (!on) return;
 			const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 			cache->m_defrag_ms += ms;
 			cache->m_defrag_max_ms = std::max(cache->m_defrag_max_ms, ms);
-			if (ms >= 4.0) std::printf("Game buffers compacting: a flip's pass took %.2f ms (%u moves)\n", ms, moves);
+			if (ms >= 4.0)
+				std::printf("Game buffers compacting: a flip's pass took %.2f ms (%u moves, %u ignored; VMA's pass begin %.2f "
+				            "ms)\n",
+				            ms, moves, ignored, begin_ms);
 		}
 	} timed {this, start};
 	if (m_defrag_pass_open) {
@@ -3002,8 +2943,13 @@ void BufferCache::Defragment(uint64_t tick) {
 	}
 	// (On the command buffer being recorded: MoveSpilledBufferBack.)
 	if (!m_scheduler.Active() || m_scheduler.Current().IsInvalid()) return;
-	timed.on = true;
-	if (vmaBeginDefragmentationPass(allocator, m_defrag, &m_defrag_pass) != VK_INCOMPLETE) {
+	// (The allocations of buffers erased before it stay till its end: their free on the reclaimer's thread waits.)
+	if (!HoldBufferFrees()) return;
+	timed.on         = true;
+	const auto begun = vmaBeginDefragmentationPass(allocator, m_defrag, &m_defrag_pass);
+	timed.begin_ms   = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+	if (begun != VK_INCOMPLETE) {
+		ReleaseBufferFrees();
 		EndDefragmentation();
 		return;
 	}
@@ -3018,6 +2964,8 @@ void BufferCache::Defragment(uint64_t tick) {
 		auto*      old = key != 0 ? m_slot_buffers.try_get(id) : nullptr;
 		if (old == nullptr || old->Allocation() != move.srcAllocation) {
 			move.operation = VMA_DEFRAGMENTATION_MOVE_OPERATION_IGNORE;
+			timed.ignored++;
+			m_defrag_ignored++;
 			continue;
 		}
 		if (old->is_deleted) {
@@ -3060,26 +3008,19 @@ void BufferCache::EndDefragmentation() {
 	VmaStatistics statistics {};
 	vmaGetPoolStatistics(m_graphics.allocator, m_graphics.game_buffer_pool, &statistics);
 	m_defrag_free_after = statistics.blockBytes - statistics.allocationBytes;
-	std::printf("Game buffers compacted: %u moved (%llu MiB), %u blocks freed (%llu MiB); %llu MiB of %llu MiB free; %u "
-	            "passes, %.1f ms (at most %.2f in a flip)\n",
-	            stats.allocationsMoved, static_cast<unsigned long long>(stats.bytesMoved >> 20u),
+	std::printf("Game buffers compacted: %u moved (%llu MiB, %u ignored), %u blocks freed (%llu MiB); %llu MiB of %llu MiB "
+	            "free; %u passes, %.1f ms (at most %.2f in a flip)\n",
+	            stats.allocationsMoved, static_cast<unsigned long long>(stats.bytesMoved >> 20u), m_defrag_ignored,
 	            stats.deviceMemoryBlocksFreed, static_cast<unsigned long long>(stats.bytesFreed >> 20u),
 	            static_cast<unsigned long long>(m_defrag_free_after >> 20u),
 	            static_cast<unsigned long long>(statistics.blockBytes >> 20u), m_defrag_passes, m_defrag_ms, m_defrag_max_ms);
-	m_defrag_passes = 0;
+	m_defrag_passes = m_defrag_ignored = 0;
 	m_defrag_ms = m_defrag_max_ms = 0;
 }
 
 void BufferCache::RunGarbageCollector(bool collect) {
 	const auto tick = m_gc_tick++;
 	RetireStaleBuffers(tick);
-	if (Stage7::Enabled() && m_chunked_upload != nullptr && tick % 60 == 0) {
-		m_chunked_upload->Trim(LocalPlatform::AvailablePhysicalMemory(), LocalPlatform::PhysicalMemory());
-		m_chunked_upload->Log(tick);
-		if (tick % 600 == 0) std::printf("Stage7 guest backing: replayed_mib=%llu requests=%llu source=existing-pageable-backing no-new-SSD-copy\n",
-		    static_cast<unsigned long long>(m_stage7_guest_replay_bytes >> 20u),
-		    static_cast<unsigned long long>(m_stage7_guest_replay_count));
-	}
 	// The game buffers in system memory are looked at every 60 flips, collection or not (this game's frames all read
 	// guest memory through device addresses). At the end of a submission its command buffer still records
 	// (EndSubmission, before the flush).

@@ -174,17 +174,20 @@ void Install(Program* program) {
 	const uint32_t game_width  = hd ? DemonsSoulsHdOutput::HdWidth : trinity ? TrinityWidth : RenderWidth;
 	const uint32_t game_height = hd ? DemonsSoulsHdOutput::HdHeight : trinity ? TrinityHeight : RenderHeight;
 	const int      mode        = hd ? HdUpscaledMode : trinity ? TrinityMode : PerformanceMode;
-	const uint32_t out_width   = hd || hd_pro ? DemonsSoulsHdOutput::HdWidth : OutputWidth;
-	const uint32_t out_height  = hd || hd_pro ? DemonsSoulsHdOutput::HdHeight : OutputHeight;
+	// (hd_pro's output: 1920x1080, or KYTY_OUTPUT_HEIGHT's, DemonsSoulsHdOutput::UpscaledWidth/Height.)
+	const uint32_t pro_width   = DemonsSoulsHdOutput::UpscaledWidth();
+	const uint32_t pro_height  = DemonsSoulsHdOutput::UpscaledHeight();
+	const uint32_t out_width   = hd ? DemonsSoulsHdOutput::HdWidth : hd_pro ? pro_width : OutputWidth;
+	const uint32_t out_height  = hd ? DemonsSoulsHdOutput::HdHeight : hd_pro ? pro_height : OutputHeight;
 	auto requested = automatic != 0 ? automatic
 	                 : numeric      ? static_cast<uint32_t>(std::strtoul(setting, nullptr, 10))
-	                 : hd_pro       ? DemonsSoulsHdOutput::HdHeight
+	                 : hd_pro       ? pro_height
 	                                : game_height;
-	if (hd_pro && requested > DemonsSoulsHdOutput::HdHeight) {
-		std::printf("Demon's Souls render size: %u is above the 1080p output's 1080 (the HD output with the upscaler); "
-		            "1080 instead\n",
-		            requested);
-		requested = DemonsSoulsHdOutput::HdHeight;
+	if (hd_pro && requested > pro_height) {
+		std::printf("Demon's Souls render size: %u is above the %ux%u output (the upscaler's, KYTY_HD_OUTPUT or "
+		            "KYTY_OUTPUT_HEIGHT); %u instead\n",
+		            requested, pro_width, pro_height, pro_height);
+		requested = pro_height;
 	}
 	if (automatic != 0) {
 		uint32_t window_width = 0, window_height = 0;
@@ -215,7 +218,7 @@ void Install(Program* program) {
 	// of it and more (its other modes); a height between the two goes up to the half, one below the third up to it
 	// (issue #129: 720 with the 4K output, 360 with the 1080p one).
 	if (trinity && requested >= LeastRenderHeight) {
-		const uint32_t output = hd_pro ? DemonsSoulsHdOutput::HdHeight : OutputHeight;
+		const uint32_t output = hd_pro ? pro_height : OutputHeight;
 		const uint32_t third = output / 3, half = output / 2;
 		const uint32_t fitted = requested < third ? third : requested > third && requested < half ? half : requested;
 		if (fitted != requested) {
@@ -286,8 +289,8 @@ void Install(Program* program) {
 		}
 	}
 	if (hd_pro) {
-		// The PS5 Pro path's 1080p output (the wide output's places at 1920x1080).
-		if (!InstallWideOutput(*program, mode, DemonsSoulsHdOutput::HdWidth, DemonsSoulsHdOutput::HdHeight))
+		// The PS5 Pro path's 1080p output (the wide output's places at 1920x1080), or KYTY_OUTPUT_HEIGHT's.
+		if (!InstallWideOutput(*program, mode, pro_width, pro_height))
 			std::printf("Demon's Souls render size: the PS5 Pro path's output settings of a known build not found; its "
 			            "4K output kept\n");
 	}

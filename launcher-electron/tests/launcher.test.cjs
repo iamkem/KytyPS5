@@ -6,150 +6,57 @@ const {spawnSync}=require('node:child_process');
 const lib=require('../logic.cjs');
 const root=process.env.KYTY_TEST_ROOT || path.resolve(__dirname,'..','..');
 const localReady=fs.existsSync(lib.findEmulator(root)) && lib.gameValid(lib.loadSettings(root));
-test('RAM Safety Mode is opt-in and preserves the known-good defaults',{skip:!localReady},()=>{
-  const original=lib.loadSettings(root);
-  const baseline=lib.buildPlayArgs(root,{...original,ram_safety:false});
-  assert.ok(!baseline.args.join(' ').includes('KYTY_PREFETCH_MIN_AVAIL_MB='));
-  assert.equal(lib.clean({}).ram_safety,false);
-  const candidate=path.join(root,'_Build','windows-ram-offload','kyty_emulator.exe');
-  if (!fs.existsSync(candidate)) {
-    assert.throws(()=>lib.buildPlayArgs(root,{...original,ram_safety:true}),/Stage 5 Offload emulator is missing/);
-    return;
-  }
-  const safety=lib.buildPlayArgs(root,{...original,ram_safety:true});
-  const vars=safety.args[safety.args.indexOf('-Set')+1];
-  assert.match(vars,/KYTY_ADAPTIVE_RAM=1/);
-  assert.match(vars,/KYTY_PREFETCH_MIN_AVAIL_MB=4096/);
-  assert.match(vars,/KYTY_SHADER_PREFETCH_THREADS=1/);
-  assert.match(vars,/KYTY_SHADER_FOLLOW_THREADS=1/);
-  assert.match(safety.args[safety.args.indexOf('-Exe')+1],/windows-ram-offload.*kyty_emulator\.exe$/i);
-  assert.notEqual(safety.args[safety.args.indexOf('-Exe')+1],baseline.args[baseline.args.indexOf('-Exe')+1]);
-  assert.deepEqual(lib.applyPreset({...original,ram_safety:true},'Balanced').ram_safety,true);
-  const probe=spawnSync(safety.command,[...safety.args,'-DryRun'],
-    {cwd:root,encoding:'utf8',windowsHide:true,timeout:40000});
-  assert.equal(probe.status,0,probe.stderr||probe.stdout);
-  assert.match(probe.stdout,/KYTY_ADAPTIVE_RAM=1/);
-  assert.match(probe.stdout,/KYTY_PREFETCH_MIN_AVAIL_MB=4096/);
-  assert.match(probe.stdout,/KYTY_SHADER_PREFETCH_THREADS=1/);
-  assert.match(probe.stdout,/KYTY_SHADER_FOLLOW_THREADS=1/);
-});
-test('Texture Residency Probe is separately opt-in and never enables destructive offload',{skip:!localReady},()=>{
-  assert.equal(lib.clean({}).texture_offload,false);
-  const prior=lib.loadSettings(root);
-  const rootBase={...prior,ram_safety:true,ram16_backing:true,texture_offload:true};
-  const native=path.join(root,'_Build','windows-ram-offload','kyty_emulator.exe');
-  if(!fs.existsSync(native)){
-    assert.throws(()=>lib.buildPlayArgs(root,rootBase),/Stage 5 Offload emulator is missing/);
-    return;
-  }
-  const active=lib.buildPlayArgs(root,rootBase);
-  const vars=active.args[active.args.indexOf('-Set')+1];
-  assert.match(vars,/KYTY_TEXTURE_OFFLOAD=0/);
-  assert.match(vars,/KYTY_TEXTURE_OFFLOAD_PROBE=1/);
-  assert.match(vars,/KYTY_TEXTURE_OFFLOAD_ADAPTIVE=1/);
-  assert.doesNotMatch(vars,/KYTY_TEXTURE_OFFLOAD=1/);
-  assert.throws(()=>lib.buildPlayArgs(root,{...rootBase,ram16_backing:false}),/requires Extended Memory Mode/);
-  const disabled=lib.buildPlayArgs(root,{...rootBase,texture_offload:false});
-  assert.doesNotMatch(disabled.args[disabled.args.indexOf('-Set')+1],/KYTY_TEXTURE_OFFLOAD=/);
-  const legacy=lib.buildPlayArgs(root,{...rootBase,ram_safety:false});
-  assert.doesNotMatch(legacy.args[legacy.args.indexOf('-Set')+1],/KYTY_TEXTURE_OFFLOAD=/);
-  assert.equal(lib.applyPreset(rootBase,'Balanced').texture_offload,true);
-});
-test('Chenxiao07 PAGE_GUARD BSOD mitigation uses a separate, opt-in native candidate',{skip:!localReady},()=>{
-  const base=lib.loadSettings(root);
-  assert.equal(lib.clean({}).chenxiao_guard,false);
-  const trialSettings={...base,ram_safety:true,ram16_backing:true,stage7_ram:false,texture_offload:false,chenxiao_guard:true};
-  const trial=lib.buildPlayArgs(root,trialSettings);
-  assert.match(trial.args[trial.args.indexOf('-Exe')+1],/windows-chenxiao-guard.*kyty_emulator\.exe$/i);
-  const env=trial.args[trial.args.indexOf('-Set')+1];
-  assert.match(env,/KYTY_READ_GUARD=1/);
-  assert.match(env,/KYTY_ADAPTIVE_RAM=1/);
-  assert.match(env,/KYTY_BACKING_FILE=1/);
-  assert.match(env,/KYTY_TEXTURE_OFFLOAD_PROBE=0/);
-  assert.doesNotMatch(env,/KYTY_STAGE7_RAM=1/);
-  assert.throws(()=>lib.buildPlayArgs(root,{...trialSettings,ram_safety:false}),/Chenxiao BSOD Guard requires/);
-  assert.throws(()=>lib.buildPlayArgs(root,{...trialSettings,ram16_backing:false}),/Chenxiao BSOD Guard requires/);
-  assert.throws(()=>lib.buildPlayArgs(root,{...trialSettings,texture_offload:true}),/Chenxiao BSOD Guard requires/);
-  assert.throws(()=>lib.buildPlayArgs(root,{...trialSettings,stage7_ram:true}),/Chenxiao BSOD Guard requires/);
-  const off=lib.buildPlayArgs(root,{...trialSettings,chenxiao_guard:false});
-  assert.doesNotMatch(off.args[off.args.indexOf('-Set')+1],/KYTY_READ_GUARD=/);
-  assert.match(off.args[off.args.indexOf('-Exe')+1],/windows-ram-offload.*kyty_emulator\.exe$/i);
-  assert.equal(lib.applyPreset(trialSettings,'Balanced').chenxiao_guard,true);
-  const probe=spawnSync(trial.command,[...trial.args,'-DryRun'],
-    {cwd:root,encoding:'utf8',windowsHide:true,timeout:40000});
-  assert.equal(probe.status,0,probe.stderr||probe.stdout);
-  assert.match(probe.stdout,/KYTY_READ_GUARD=1/);
-  assert.match(probe.stdout,/windows-chenxiao-guard/i);
-});
-test('Stage 7 residency mode is isolated and stays opt-in',{skip:!localReady},()=>{
-  const base=lib.loadSettings(root);
-  assert.equal(lib.clean({}).stage7_ram,false);
-  const candidate={...base,ram_safety:true,ram16_backing:true,texture_offload:false,stage7_ram:true};
-  const trial=lib.buildPlayArgs(root,candidate);
-  assert.match(trial.args[trial.args.indexOf('-Exe')+1],/windows-stage7-resource.*kyty_emulator\.exe$/i);
-  const env=trial.args[trial.args.indexOf('-Set')+1];
-  assert.match(env,/KYTY_STAGE7_RAM=1/);
-  assert.match(env,/KYTY_TEXTURE_OFFLOAD_PROBE=0/);
-  assert.match(env,/KYTY_BACKING_FILE=1/);
-  assert.match(env,/KYTY_ADAPTIVE_RAM=1/);
-  assert.doesNotMatch(env,/KYTY_TEXTURE_OFFLOAD=1/);
-  assert.throws(()=>lib.buildPlayArgs(root,{...candidate,ram_safety:false}),/Stage 7 requires/);
-  assert.throws(()=>lib.buildPlayArgs(root,{...candidate,ram16_backing:false}),/Stage 7 requires/);
-  assert.throws(()=>lib.buildPlayArgs(root,{...candidate,texture_offload:true}),/Stage 7 requires/);
-  const old=lib.buildPlayArgs(root,{...candidate,stage7_ram:false});
-  assert.doesNotMatch(old.args[old.args.indexOf('-Set')+1],/KYTY_STAGE7_RAM=/);
-  assert.match(old.args[old.args.indexOf('-Exe')+1],/windows-ram-offload.*kyty_emulator\.exe$/i);
-  assert.equal(lib.applyPreset(candidate,'Balanced').stage7_ram,true);
-  const probe=spawnSync(trial.command,[...trial.args,'-DryRun'],
-    {cwd:root,encoding:'utf8',windowsHide:true,timeout:40000});
-  assert.equal(probe.status,0,probe.stderr||probe.stdout);
-  assert.match(probe.stdout,/KYTY_STAGE7_RAM=1/);
-  assert.match(probe.stdout,/windows-stage7-resource/i);
-});
-test('Chenxiao v20261023b isolated runtime exposes safe FSR3, DLSS model and 30 FPS',{skip:!localReady},()=>{
-  const base={...lib.loadSettings(root),upstream_latest:true,chenxiao_guard:false,ram_safety:true,ram16_backing:true,
-    stage7_ram:false,texture_offload:false,fps120:false,fps30:false,fsr:false,framegen:0,dlss_model:'auto'};
-  assert.equal(lib.clean({}).upstream_latest,false);
-  assert.throws(()=>lib.buildPlayArgs(root,{...base,stage7_ram:true}),/Chenxiao v20261023b requires/);
-  assert.throws(()=>lib.buildPlayArgs(root,{...base,texture_offload:true}),/Chenxiao v20261023b requires/);
-  assert.throws(()=>lib.buildPlayArgs(root,{...base,ram16_backing:false}),/Chenxiao v20261023b requires/);
-  assert.throws(()=>lib.buildPlayArgs(root,{...base,ram_safety:false}),/Chenxiao v20261023b requires/);
+test('Latest-only native and shader tool; legacy failed experiments are not selectable',{skip:!localReady},()=>{
+  const base={...lib.loadSettings(root),ram_safety:true,ram16_backing:true,framegen:0,fps120:false,fps30:false,dlss_model:'auto'};
+  const settings=lib.clean({...base,stage7_ram:true,texture_offload:true,chenxiao_guard:true,upstream_latest:false});
+  for(const key of ['stage7_ram','texture_offload','chenxiao_guard','upstream_latest'])
+    assert.equal(Object.hasOwn(settings,key),false,'legacy setting '+key+' must be removed');
+  assert.equal(lib.clean({}).ram_safety,true);
+  const spec=lib.buildPlayArgs(root,settings);
+  assert.match(spec.args[spec.args.indexOf('-Exe')+1],/latest.*native-build.*kyty_emulator\.exe$/i);
+  const flags=spec.args[spec.args.indexOf('-Set')+1];
+  assert.match(flags,/KYTY_ADAPTIVE_RAM=1/);
+  assert.match(flags,/KYTY_BACKING_FILE=1/);
+  assert.match(flags,/KYTY_TEXTURE_OFFLOAD=0/);
+  assert.match(flags,/KYTY_TEXTURE_OFFLOAD_PROBE=0/);
+  assert.doesNotMatch(flags,/KYTY_STAGE7_RAM|KYTY_READ_GUARD=1/);
   assert.throws(()=>lib.buildPlayArgs(root,{...base,fps30:true,fps120:true}),/not both/);
-  assert.throws(()=>lib.buildPlayArgs(root,{...base,upstream_latest:false,upscaler:'fsr'}),/require Chenxiao v20261023b/);
-  const native=path.join(root,'_Build','windows-chenxiao-v15','kyty_emulator.exe');
-  if(!fs.existsSync(native)){
-    assert.throws(()=>lib.buildPlayArgs(root,base),/v20261023b native is missing/);
-    return;
-  }
-  const fsrSettings={...base,upscaler:'fsr',output:'1080p',render_dlss:540,fps30:true};
-  const fsr=lib.buildPlayArgs(root,fsrSettings);
-  const env=fsr.args[fsr.args.indexOf('-Set')+1];
+  const fsr=lib.buildPlayArgs(root,{...base,upscaler:'fsr',output:'1080p',render_dlss:540,fps30:true,gpu:'RTX 5070'});
+  const fsrFlags=fsr.args[fsr.args.indexOf('-Set')+1];
+  assert.match(fsrFlags,/KYTY_UPSCALER=fsr/);
+  assert.match(fsrFlags,/KYTY_GPU=RTX 5070/);
+  assert.match(fsrFlags,/KYTY_FLIP_RATE=1/);
   assert.equal(fsr.args[fsr.args.indexOf('-RenderHeight')+1],'540');
   assert.ok(fsr.args.includes('-HdOutput'));
-  assert.match(fsr.args[fsr.args.indexOf('-Exe')+1],/windows-chenxiao-v15.*kyty_emulator\.exe$/i);
-  assert.match(env,/KYTY_UPSCALER=fsr/);
-  assert.equal(lib.clean({...base,gpu:'NVIDIA RTX 5070;invalid'}).gpu,'');
-  const gpu=lib.buildPlayArgs(root,{...fsrSettings,gpu:'RTX 5070'});
-  assert.match(gpu.args[gpu.args.indexOf('-Set')+1],/KYTY_GPU=RTX 5070/);
-  assert.match(env,/KYTY_FLIP_RATE=1/);
-  assert.match(env,/KYTY_READ_GUARD=1/);
-  assert.match(env,/KYTY_TEXTURE_OFFLOAD=0/);
   assert.ok(!fsr.args.includes('-StreamlineDir'));
-  assert.ok(!fsr.args.includes('-Upscaler'));
-  assert.equal(lib.clean({...base,upscaler:'fsr',output:'1080p',render_dlss:360}).render_dlss,360);
-  const dlss=lib.buildPlayArgs(root,{...base,upscaler:'dlss',output:'4k',dlss_model:'K'});
-  assert.match(dlss.args[dlss.args.indexOf('-Set')+1],/KYTY_DLSS_PRESET=K/);
-  assert.equal(lib.applyPreset(base,'Balanced').upstream_latest,true);
-  const pre=lib.buildPrecompileArgs(root,base);
-  assert.match(pre.args[pre.args.indexOf('-Exe')+1],/windows-chenxiao-v15.*kyty_shader_precompile\.exe$/i);
+  assert.equal(lib.clean({...base,gpu:'RTX 5070;invalid'}).gpu,'');
+  const hd=lib.buildPlayArgs(root,{...base,upscaler:'dlss',output:'1440p',render_dlss:1080,dlss_model:'K'});
+  assert.match(hd.args[hd.args.indexOf('-Set')+1],/KYTY_OUTPUT_HEIGHT=1440/);
+  assert.match(hd.args[hd.args.indexOf('-Set')+1],/KYTY_DLSS_PRESET=K/);
+  const pre=lib.buildPrecompileArgs(root,{...base,gpu:'RTX 5070'});
+  assert.match(pre.args[pre.args.indexOf('-Exe')+1],/latest.*native-build.*kyty_shader_precompile\.exe$/i);
+  assert.equal(pre.args[pre.args.indexOf('-Gpu')+1],'RTX 5070');
   assert.ok(pre.args.includes('-Incremental'));
-  // Merely planning precompile is safe; this test does NOT execute it.
-  const dry=spawnSync(fsr.command,[...fsr.args,'-DryRun'],
-    {cwd:root,encoding:'utf8',windowsHide:true,timeout:45000});
+  assert.ok(!pre.args.includes('-ReplaceCache'));
+  const dry=spawnSync(fsr.command,[...fsr.args,'-DryRun'],{cwd:root,encoding:'utf8',windowsHide:true,timeout:45000});
   assert.equal(dry.status,0,dry.stderr||dry.stdout);
   assert.match(dry.stdout,/KYTY_UPSCALER=fsr/);
-  assert.match(dry.stdout,/KYTY_READ_GUARD=1/);
 });
+
+test('Shader interrupted merge cannot mark a completed fingerprint',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'..','..','precompile-windows.ps1'),'utf8');
+  assert.match(source,/\$resumeMarker\s*=/);
+  assert.match(source,/\$resumePending\s*=/);
+  assert.match(source,/\$Incremental -and !\$resumePending/);
+  assert.match(source,/if \(\$stopped\) \{\s*Write-Host 'update: stopped safely;/);
+  assert.match(source,/exit 130/);
+  const stopped=source.lastIndexOf('if ($stopped) {');
+  const fingerprint=source.lastIndexOf('Save-KytyShaderFingerprint $PSScriptRoot $gameId');
+  assert.ok(stopped>=0 && fingerprint>stopped,'fingerprint only after resumed full run');
+  assert.match(source,/\$mergeArguments \+= '--stamp'/);
+  assert.match(source,/Remove-Item -LiteralPath \$resumeMarker/);
+});
+
 test('Presets are actual graphics settings and preserve RAM16',()=>{
   const base={...lib.defaults,ram16_backing:true,ram_diet:true,lowlatency:true};
   for(const [name,p] of Object.entries(lib.presets)){
@@ -210,7 +117,7 @@ test('chenxiao07 1080p game output works with DLSS and preserves explicit 4K out
   assert.equal(args[args.indexOf('-Upscaler')+1],'dlss');
   assert.equal(args[args.indexOf('-FrameGen')+1],'1');
   assert.ok(args.includes('-HdOutput'),'DLSS and HD output may be enabled together');
-  assert.match(args[args.indexOf('-Exe')+1],/windows-chenxiao.*kyty_emulator\.exe$/i,
+  assert.match(args[args.indexOf('-Exe')+1],/latest.*native-build.*kyty_emulator\.exe$/i,
     'Experimental HD+DLSS must use the isolated emulator');
   assert.equal(lib.clean({...hd,render_dlss:1440}).render_dlss,1080,'HD output clamps rendering to 1080');
   assert.throws(()=>lib.buildPlayArgs(root,{...hd,ratio:'21:9'}),/16:9 only/);
@@ -234,7 +141,7 @@ test('DLSS-G 2x survives graphics preset and reaches PowerShell as -FrameGen 1',
 });
 test('Missing emulator or missing game does not falsely report success',()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'kyty-noexe-'));
-  try{assert.throws(()=>lib.buildPlayArgs(dir,lib.defaults),/executable not found/);}
+  try{assert.throws(()=>lib.buildPlayArgs(dir,lib.defaults),/Latest Kyty native build is missing/);}
   finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
 test('Real run-windows.ps1 accepts Electron Play settings in DryRun',{skip:!localReady},()=>{

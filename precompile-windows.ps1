@@ -69,6 +69,7 @@ param(
 	[switch]$RefreshSeeds,
 	# Explicit mode for launchers: preserve existing compatible caches, compile only missing pipelines.
 	[switch]$Incremental,
+	[switch]$ForceResume,
 	# Optional signal file created by the Electron launcher: stop scheduling shards,
 	# finish current tasks, then merge before exiting with code 130.
 	[string]$StopSignal = '',
@@ -154,6 +155,15 @@ if (!$Game) { $Game = $lastGame }
 $info = Read-GameParam $Game
 if (!$info) { throw "no sce_sys\param.json in $Game (-Game <folder or .zar>, or start the game once to choose it)" }
 $gameId = "$($info.titleId)_$($info.contentVersion)"
+# A durable marker is created before even making seeds. A killed/interrupted
+# update must NEVER look 'completed' because it merged only some shards.
+$resumeMarker = Join-Path $PSScriptRoot "_PipelineCache\static\$gameId.resume-required"
+$resumePending = (Test-Path -LiteralPath $resumeMarker) -or ($Incremental -and $ForceResume)
+if ($Incremental -and !$resumePending) {
+    New-Item -ItemType Directory -Force (Split-Path $resumeMarker) | Out-Null
+    Set-Content -LiteralPath $resumeMarker -Value ("incomplete " + (Get-Date).ToString("o")) -Encoding UTF8
+}
+if ($resumePending) { Write-Host 'update: incomplete previous shader update detected; RESUMING remaining work' }
 if (!$Seeds) {
 	$Seeds = if ((Test-Path "$PSScriptRoot\seeds-$gameId.seeds") -or !(Test-Path "$PSScriptRoot\_Build")) { "$PSScriptRoot\seeds-$gameId.seeds" } else { "$PSScriptRoot\_Build\static-precompile\seeds-$gameId.seeds" }
 }
@@ -177,7 +187,7 @@ $fingerprintHelper = Join-Path $PSScriptRoot 'tools\local\static-precompile\cach
 if (Test-Path -LiteralPath $fingerprintHelper) { . $fingerprintHelper }
 # Check compatibility with the current GPU/driver and translated shader feature set on every
 # incremental request. A new executable build alone is NOT a reason to discard a usable cache.
-if ($Incremental -and !$ReplaceCache -and !$RefreshSeeds -and !$Full -and !$Quick -and !$InputsOnly -and !$Coverage -and !$ExportHints) {
+if ($Incremental -and !$resumePending -and !$ReplaceCache -and !$RefreshSeeds -and !$Full -and !$Quick -and !$InputsOnly -and !$Coverage -and !$ExportHints) {
 	$inspection = @(& $Exe --game $Game --seeds $Seeds --status 2>&1)
 	$inspectionText = ($inspection | Out-String)
 	if ($LASTEXITCODE -eq 0) {
@@ -199,6 +209,7 @@ if ($Incremental -and !$ReplaceCache -and !$RefreshSeeds -and !$Full -and !$Quic
 					Save-KytyShaderFingerprint $PSScriptRoot $gameId $fingerprint
 				}
 				Write-Host 'cache:      VALID for current GPU/driver and shaders; nothing to precompile.'
+				if ($Incremental -and (Test-Path -LiteralPath $resumeMarker)) { Remove-Item -LiteralPath $resumeMarker -Force -ErrorAction Stop }
 				return
 			}
 			# Driver cache is usable; only rebuild shader prefetch inputs, not thousands of pipelines.
@@ -379,6 +390,7 @@ if ($InputsOnly) {
 		Save-KytyShaderFingerprint $PSScriptRoot $gameId (Get-KytyShaderFingerprint $PSScriptRoot $Seeds $gameId)
 	}
 	Write-Host "wrote _PipelineCache\static\$gameId.shaders"
+	if ($Incremental -and (Test-Path -LiteralPath $resumeMarker)) { Remove-Item -LiteralPath $resumeMarker -Force -ErrorAction Stop }
 	return
 }
 # The shards an interrupted run finished first: what they hold is not compiled again.
@@ -491,15 +503,25 @@ while ($first.Count -or $second.Count -or $running.Count) {
 	}
 }
 $env:KYTY_PRECOMPILE_CLAIMS = $null
+if ($StopSignal -and (Test-Path -LiteralPath $StopSignal)) { $stopped = $true }
 # (-Quick: what the store held of the other shaders stays. Recorded play that could not be gathered: the pipelines an
 # earlier run made for it stay too - pruned to the seeds alone, the game compiled them all again while playing.)
 # (--stamp: the store's translation features, those this run used: ShaderRecompiler TranslatorFeatures.)
 # Preserve all existing compatible pipeline binaries. --prune previously discarded old cache entries even
 # when they remained useful after a build. Only an explicit maintenance operation may replace them.
 Write-Host 'stage: merging completed shader shards into existing cache'
-$mergeArguments = @('--merge', '--stamp')
-if ($ReplaceCache -and !$Quick -and !$recordedLost) { $mergeArguments += '--prune' }
+# A partial merge must not commit the translator feature stamp: that stamp
+# means ALL current inputs were handled. A future run must re-plan any omissions.
+$mergeArguments = @('--merge')
+if (!$stopped) {
+    $mergeArguments += '--stamp'
+    if ($ReplaceCache -and !$Quick -and !$recordedLost) { $mergeArguments += '--prune' }
+}
 Wait-Precompile (Start-Precompile 'merge' $mergeArguments) 'merge'
+if ($stopped) {
+    Write-Host 'update: stopped safely; completed shards merged; resume required'
+    exit 130
+}
 if ($Quick) { Wait-Precompile (Start-Precompile 'inputs' $inputs) 'inputs' }
 $cache = Get-ChildItem "$PSScriptRoot\_PipelineCache\static\$gameId.bin", "$PSScriptRoot\_PipelineCache\static\$gameId.binaries",
 	"$PSScriptRoot\_PipelineCache\static\$gameId.blobs" -ErrorAction SilentlyContinue |
@@ -507,8 +529,8 @@ $cache = Get-ChildItem "$PSScriptRoot\_PipelineCache\static\$gameId.bin", "$PSSc
 if (Get-Command Save-KytyShaderFingerprint -ErrorAction SilentlyContinue) {
 	Save-KytyShaderFingerprint $PSScriptRoot $gameId (Get-KytyShaderFingerprint $PSScriptRoot $Seeds $gameId)
 }
+if ($Incremental -and (Test-Path -LiteralPath $resumeMarker)) { Remove-Item -LiteralPath $resumeMarker -Force -ErrorAction Stop }
 Write-Host ("done in {0:hh\:mm\:ss}: {1} ({2:N0} MB; {3} shards split)" -f ((Get-Date) - $begin), $cache.FullName, ($cache.Length / 1MB), $split)
-if ($stopped) { Write-Host 'update: stopped safely; previously completed shards merged'; exit 130 }
 } finally {
 	# A failed shard ends the run: the others are stopped too.
 	if ($running) { foreach ($entry in $running.Values) { if (!$entry[2].HasExited) { $entry[2].Kill(); $entry[2].WaitForExit() } } }

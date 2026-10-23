@@ -165,6 +165,9 @@ public:
 	// KYTY_TEXTURE_OFFLOAD(_PROBE) (texture-offload.h): the guest bytes of clean sampled textures probed for touches, or
 	// dropped from RAM after a download checked to give them back exactly (RunGarbageCollector).
 	void OffloadScan(uint64_t tick);
+	// KYTY_FILE_OFFLOAD (file-offload.h): APR-read pages still equal to their files probed, or
+	// dropped (OffloadScan).
+	void OffloadFiles();
 	// Render thread: the dropped bytes over [vaddr, vaddr + size) downloaded back from their images (texture-offload.h;
 	// `touch`: TextureOffload::Touch; `async`: written back by the offload worker when the GPU is done, touches waiting
 	// till then). Takes m_lock unless the caller holds it.
@@ -422,6 +425,8 @@ private:
 	uint64_t                                          m_logged_private       = 0;
 	bool                                              m_logged_short_of_ram  = false;
 	uint64_t         m_gc_tick                = 0;
+	uint64_t         m_scene_generation       = 0; // RetireStaleImages: the world the game is in (SceneTags), entered
+	uint64_t         m_scene_tick             = 0; // at this tick
 	std::atomic<uint64_t> m_frame {0};
 	struct PendingDownload {
 		uint64_t address = 0, size = 0, tick = 0;

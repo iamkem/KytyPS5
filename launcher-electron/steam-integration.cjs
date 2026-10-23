@@ -10,15 +10,10 @@ function isSteamGameMode(argv=[]){
  return Array.isArray(argv)&&argv.includes(STEAM_GAME_ARG)&&!argv.includes('--smoke-ui');
 }
 function steamShortcut(root,exists=fs.existsSync){
- const launchers=['v12','v11','v10','v9','v8','v7','v6'].map(version=>path.join(root,'_Build',
-   'demons-souls-launcher-'+version,'DemonsSoulsLauncher-win32-x64','DemonsSoulsLauncher.exe'));
- const target=launchers.find(exists);
+ const target=path.join(root,'_Build','latest','launcher','DemonsSoulsLauncher-win32-x64','DemonsSoulsLauncher.exe');
  return {
-   name:STEAM_GAME_NAME,
-   target:target||launchers[0],
-   startIn:path.dirname(target||launchers[0]),
-   launchOptions:STEAM_GAME_ARG,
-   available:Boolean(target),
+   name:STEAM_GAME_NAME, target, startIn:path.dirname(target),
+   launchOptions:STEAM_GAME_ARG, available:Boolean(exists(target)),
    limitation:'Steam displays a Non-Steam Game while the Steam-launched launcher process remains running. Custom Steamworks Rich Presence, achievements and guaranteed overlay are not available.'
  };
 }

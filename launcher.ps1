@@ -386,6 +386,8 @@ function Get-PlayCommand {
 	if ($dlss) { $arguments += @('-Upscaler', 'dlss') } elseif ($fsrUpscaler) { $arguments += @('-Upscaler', 'fsr') }
 	# (DLSS makes the 4K output: the 1080p output only with the game's own upscale.)
 	if (Test-HdOutput) { $arguments += '-HdOutput' }
+	# Game output 1440p, with DLSS or FSR 3 only: the PS5 Pro path's output at 2560x1440 (KytyLauncher.exe's Commands.Output1440).
+	elseif ($settings.output -eq '1440p' -and ($dlss -or $fsrUpscaler)) { $arguments += @('-OutputHeight', 1440) }
 	if ($frameGenAvailable -and ((!$fsrOn -and [int]$settings.framegen -ge 2) -or $dlss)) { $arguments += @('-StreamlineDir', "`"$streamline`"") }
 	$arguments += @(Get-GpuArguments)
 	# Switches of the config, one -Set argument (run-windows.ps1 splits it at the commas).
@@ -654,8 +656,8 @@ Add-Row 'Upscaler' @($upscaler, $upscalerNote)
 # The game's output (run-windows.ps1 -HdOutput, src/loader/demonsSoulsHdOutput.h): 4K, or the game's own 1080p mode, its
 # post-processing and HUD at 1920x1080 and its 3D at most 1080 high (with DLSS: DLSS upscales the 3D to that 1080p).
 $output = New-Object System.Windows.Forms.ComboBox -Property @{ DropDownStyle = 'DropDownList'; Width = 205 }
-$output.Items.AddRange(@('Automatic', '4K (PS5)', '1080p'))
-$output.SelectedIndex = [Math]::Max(0, [Array]::IndexOf(@('auto', '4k', '1080p'), [string]$settings.output))
+$output.Items.AddRange(@('Automatic', '4K (PS5)', '1080p', '1440p (DLSS / FSR 3)'))
+$output.SelectedIndex = [Math]::Max(0, [Array]::IndexOf(@('auto', '4k', '1080p', '1440p'), [string]$settings.output))
 $outputNote = New-Object System.Windows.Forms.Label -Property @{ AutoSize = $true; ForeColor = 'Gray'; Margin = '6,6,0,0'
 	Text = 'Automatic: 1080p for a 16:9 window (full screen: the screen) up to 1080 lines, else 4K. 1080p: the game''s HD layout, effects and HUD at 1920x1080; less GPU work; with DLSS, DLSS makes the 1080p picture' }
 $output.Add_SelectedIndexChanged({ Update-RenderNote })
@@ -794,7 +796,7 @@ function Read-Form {
 	if ($renderForDlss) { $settings.render_dlss = $height } else { $settings.render = $height }
 	$settings.ratio      = ([string]$ratio.SelectedItem -split ' ')[0]
 	$settings.quality    = ([string]$quality.SelectedItem -split ' ')[0].ToLowerInvariant()
-	$settings.output     = @('auto', '4k', '1080p')[[Math]::Max(0, $output.SelectedIndex)]
+	$settings.output     = @('auto', '4k', '1080p', '1440p')[[Math]::Max(0, $output.SelectedIndex)]
 	# (Kept as it was where the DLLs are missing.)
 	if ($frameGenAvailable) { $settings.framegen = if ($frameGen.SelectedIndex -gt 0) { $frameGen.SelectedIndex + 1 } else { 0 } }
 	# (DLSS kept as it was where its DLLs are missing; FSR 3 and the game's own anywhere.)

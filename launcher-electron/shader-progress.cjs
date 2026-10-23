@@ -46,7 +46,7 @@ class ShaderProgress extends EventEmitter{
           this.state={...this.state,...saved,lines:Array.isArray(saved.lines)?saved.lines.slice(-170):[]};
         }else if(saved && saved.startedAt){
           this.state={...this.state,...saved,status:'interrupted',
-            phase:'Previous launcher session ended; inspect the log to confirm the update',lines:(saved.lines||[]).slice(-170)};
+            phase:'Previous session interrupted — Update Missing Shaders will resume unfinished shards',lines:(saved.lines||[]).slice(-170)};
         }
       }catch{}
     }
@@ -68,10 +68,36 @@ class ShaderProgress extends EventEmitter{
     const id=new Date().toISOString().replace(/[:.]/g,'-')+'-'+crypto.randomBytes(3).toString('hex');
     const logFile=path.join(this.logDir,'shader-update-'+id+'.log');
     const stopFile=path.join(this.logDir,'shader-update-'+id+'.stop');
-    const runSpec={...spec,args:[...spec.args,'-StopSignal',stopFile]};
+    const wasInterrupted=['stopped','failed','interrupted'].includes(this.state.status);
+    const resumedArgs=[];
+    if(wasInterrupted && spec.args.includes('-Incremental')){
+      const script=path.join(this.root,'precompile-windows.ps1');
+      const supportsForceResume=fs.existsSync(script) &&
+        fs.readFileSync(script,'utf8').includes('[switch]$ForceResume');
+      if(supportsForceResume){
+        resumedArgs.push('-ForceResume');
+      }else{
+        // Older runner versions do not accept -ForceResume. Persist the marker
+        // they already understand instead of accidentally treating a partial
+        // cache as complete. Refuse archives without known metadata.
+        const gameAt=spec.args.indexOf('-Game');
+        const game=gameAt>=0?spec.args[gameAt+1]:'';
+        const metadata=JSON.parse(fs.readFileSync(path.join(game,'sce_sys','param.json'),'utf8').replace(/^\uFEFF/,''));
+        if(!/^[A-Za-z0-9_-]+$/.test(metadata.titleId) ||
+           !/^[A-Za-z0-9._-]+$/.test(metadata.contentVersion))
+          throw Error('Cannot safely resume shader update: invalid game metadata');
+        const marker=path.join(this.root,'_PipelineCache','static',
+          metadata.titleId+'_'+metadata.contentVersion+'.resume-required');
+        fs.mkdirSync(path.dirname(marker),{recursive:true});
+        try{fs.writeFileSync(marker,'interrupted update: resume pending\n',{flag:'wx'});}
+        catch(e){if(e.code!=='EEXIST')throw e;}
+      }
+    }
+    const runSpec={...spec,args:[...spec.args,...resumedArgs,'-StopSignal',stopFile]};
     const child=spawn(runSpec.command,runSpec.args,{cwd:this.root,windowsHide:true,stdio:['ignore','pipe','pipe']});
     this.child=child;this.stopFile=stopFile;
-    this.state={status:'running',phase:'Starting shader update',percent:null,shards:null,
+    const resuming=wasInterrupted;
+    this.state={status:'running',phase:resuming?'Resuming unfinished shader update':'Starting shader update',percent:null,shards:null,
       startedAt:new Date().toISOString(),finishedAt:null,pid:child.pid||null,stopRequested:false,
       exitCode:null,logFile,lines:[]};
     const file=fs.createWriteStream(logFile,{flags:'a'});
@@ -101,12 +127,15 @@ class ShaderProgress extends EventEmitter{
       file.end();
       this.state.exitCode=code;
       this.state.finishedAt=new Date().toISOString();
-      if(this.state.stopRequested && code===130)this.state.status='stopped';
+      if(code===130)this.state.status='stopped';
       else if(code===0)this.state.status=this.state.phase==='Already up to date'?'up-to-date':'completed';
       else this.state.status='failed';
       if(error)this.state.phase='Cannot start shader update: '+error.message;
       else if(this.state.status==='completed'){this.state.phase='Completed — shader cache updated';this.state.percent=100;}
-      else if(this.state.status==='stopped')this.state.phase='Stopped safely — existing cache retained';
+      else if(this.state.status==='stopped'){
+        this.state.phase='Paused — completed shards saved; Update Missing Shaders resumes remaining work';
+        this.state.percent=null;
+      }
       else if(this.state.status==='failed')this.state.phase='Failed — see log for details (exit code '+code+')';
       this.child=null;this.stopFile=null;
       try{if(fs.existsSync(stopFile))fs.unlinkSync(stopFile);}catch{}

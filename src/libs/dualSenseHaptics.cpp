@@ -114,6 +114,17 @@ uint32_t   g_speaker_volume        = 100;
 // scale, where the controller's amplifier clips (heard as tearing). Off by default - it colours
 // what it touches, and the gain knobs are the first thing to try.
 bool       g_speaker_limiter       = false;
+// How hard the rumble motors are driven from a haptic block's peak: 2.0 is the mainline's reference, 0
+// leaves the work to the actuators alone (faint), 4 doubles it. Strength is taste - too low reads as "I
+// cannot feel it", too high as "it buzzes through a whole spell charge" - so it is a setting, not a
+// constant: dualsense-haptics.txt `motor_gain=`, or KYTY_DUALSENSE_VIBRATION_MOTOR_GAIN.
+float      g_vibration_motor_gain  = 2.0f;
+// How long the motors stay on after each block, and how fast the hold falls between blocks. Together
+// they are the tail of a hit: a report lasts motor_ms, and the level carries over at motor_decay per
+// 21.3 ms report. A hit is a single block, so 60 ms / 0.6 ends it in about 250 ms; longer or slower
+// reads as a hit that keeps rumbling (and a whole spell charge as one long one).
+uint32_t   g_vibration_motor_ms    = 60;
+float      g_vibration_motor_decay = 0.6f;
 
 // What the routes actually did, so a log can tell clipping from silence and from a stalled endpoint.
 uint64_t   g_speaker_writes        = 0;
@@ -262,14 +273,36 @@ void ReadSettingsFile() {
 			}
 		} else if (key == "speaker_limiter") {
 			g_speaker_limiter = value != "0" && Lowered(value) != "false" && Lowered(value) != "no";
+		} else if (key == "motor_gain" || key == "vibration_motor_gain") {
+			const auto gain = std::strtof(value.c_str(), nullptr);
+			if (gain >= 0.0f && gain <= 16.0f) {
+				g_vibration_motor_gain = gain;
+			}
+		} else if (key == "motor_ms" || key == "vibration_motor_ms") {
+			const auto ms = std::strtoul(value.c_str(), nullptr, 10);
+			// At least 1: SDL2 reads 0 ms as "no expiry", and a game that stops writing in the middle of
+			// a hit would then leave the motors running at their last level.
+			if (ms >= 1 && ms <= 500) {
+				g_vibration_motor_ms = static_cast<uint32_t>(ms);
+			}
+		} else if (key == "motor_decay" || key == "vibration_motor_decay") {
+			const auto decay = std::strtof(value.c_str(), nullptr);
+			// Below 1.0: at exactly 1 the hold never falls, so it never reaches the floor and a single
+			// hit would rumble until the next one.
+			if (decay > 0.0f && decay < 1.0f) {
+				g_vibration_motor_decay = decay;
+			}
 		}
 	}
 	std::fclose(file);
 
-	std::printf("DualSense: dualsense-haptics.txt: %s, vibration gain %.2f on channels %u-%u, "
-	            "speaker gain %.2f on channels %u-%u, preamp %s, volume %u, limiter %s%s\n",
+	std::printf("DualSense: dualsense-haptics.txt: %s, vibration gain %.2f on channels %u-%u, motors "
+	            "%.2f (%u ms, decay %.2f), speaker gain %.2f on channels %u-%u, preamp %s, volume %u, "
+	            "limiter %s%s\n",
 	            g_enabled ? "on" : "off", static_cast<double>(g_gain), g_first_channel,
-	            g_first_channel + g_channel_count - 1u, static_cast<double>(g_speaker_gain),
+	            g_first_channel + g_channel_count - 1u, static_cast<double>(g_vibration_motor_gain),
+	            g_vibration_motor_ms, static_cast<double>(g_vibration_motor_decay),
+	            static_cast<double>(g_speaker_gain),
 	            g_speaker_first_channel, g_speaker_first_channel + g_speaker_channel_count - 1u,
 	            g_speaker_preamp ? "on (+6 dB)" : "off", g_speaker_volume,
 	            g_speaker_limiter ? "on" : "off", g_all_channels ? ", all channels" : "");
@@ -307,6 +340,30 @@ void ReadSettings() {
 		const auto gain = std::strtof(value, nullptr);
 		if (gain > 0.0f && gain <= 4.0f) {
 			g_gain = gain;
+		}
+	}
+	// KYTY_DUALSENSE_VIBRATION_MOTOR_GAIN=<float> scales the rumble motors' drive (0 leaves them off
+	// and the actuators alone, 2.0 is the mainline's reference, 4 doubles it).
+	if (const char* value = std::getenv("KYTY_DUALSENSE_VIBRATION_MOTOR_GAIN"); value != nullptr) {
+		const auto gain = std::strtof(value, nullptr);
+		if (gain >= 0.0f && gain <= 16.0f) {
+			g_vibration_motor_gain = gain;
+		}
+	}
+	// KYTY_DUALSENSE_VIBRATION_MOTOR_MS=<0..500> and KYTY_DUALSENSE_VIBRATION_MOTOR_DECAY=<0..1>: the
+	// tail of a hit - how long each report lasts and how fast the hold falls between reports.
+	if (const char* value = std::getenv("KYTY_DUALSENSE_VIBRATION_MOTOR_MS"); value != nullptr) {
+		const auto ms = std::strtoul(value, nullptr, 10);
+		// At least 1: SDL2 reads 0 ms as "no expiry" (see the file key above).
+		if (ms >= 1 && ms <= 500) {
+			g_vibration_motor_ms = static_cast<uint32_t>(ms);
+		}
+	}
+	if (const char* value = std::getenv("KYTY_DUALSENSE_VIBRATION_MOTOR_DECAY"); value != nullptr) {
+		const auto decay = std::strtof(value, nullptr);
+		// Below 1.0, as in dualsense-haptics.txt: at exactly 1 the hold never reaches the floor.
+		if (decay > 0.0f && decay < 1.0f) {
+			g_vibration_motor_decay = decay;
 		}
 	}
 	// KYTY_DUALSENSE_SPEAKER_CHANNELS=01|23|all and KYTY_DUALSENSE_SPEAKER_GAIN=<float>: which
@@ -635,18 +692,34 @@ void Close(bool speaker) {
 
 // Drives the pad's rumble motors from a block of haptic audio: the mainline's fallback for pads with no
 // haptic-audio path (its Queue(): peak -> SDL_RumbleGamepad), used here for a DualSense on Bluetooth,
-// where the actuators are heard far more than they are felt. 100 ms outlives the gaps between blocks.
+// where the actuators are heard far more than they are felt.
 void RumbleFromHaptics(float left, float right) {
 	// Hold with a decay instead of dropping to the block's own peak: consecutive hits arrive in separate
 	// blocks, and the motors should not fall silent in the gaps between them.
-	static float held[2] = {0.0f, 0.0f};
-	held[0] = std::max(std::max(left, 0.0f), held[0] * 0.8f);
-	held[1] = std::max(std::max(right, 0.0f), held[1] * 0.8f);
-	if (held[0] <= 0.0f && held[1] <= 0.0f) {
-		return;
+	//
+	// The decay ends at a floor, on purpose. An asymptotic one never reached zero, so every block kept
+	// re-arming the motors with a smaller-but-nonzero strength and a single hit rumbled for over a
+	// second. 0.6 per 21.3 ms report falls from a full hit to the floor in about 190 ms, and the
+	// duration below adds its own tail - short enough to end with the hit, long enough to bridge two or
+	// three blocks.
+	constexpr float FLOOR = 0.01f;
+	static float    held[2] = {0.0f, 0.0f};
+	held[0] = std::max(std::max(left, 0.0f), held[0] * g_vibration_motor_decay);
+	held[1] = std::max(std::max(right, 0.0f), held[1] * g_vibration_motor_decay);
+	const bool live = held[0] >= FLOOR || held[1] >= FLOOR;
+	// Just crossed the floor: stop the motors explicitly. Relying on the report's own duration would not
+	// do - SDL2 reads 0 ms as "no expiry" - and a game that stops writing in the middle of a hit would
+	// otherwise leave them running at the last level, a fade that never finishes.
+	const bool stop = !live && (held[0] != 0.0f || held[1] != 0.0f);
+	if (!live) {
+		held[0] = held[1] = 0.0f;
+		if (!stop) {
+			return;
+		}
 	}
 	const auto to_motor = [](float value) {
-		return static_cast<uint16_t>(std::clamp(value * 2.0f, 0.0f, 1.0f) * 65535.0f);
+		return static_cast<uint16_t>(
+		    std::clamp(value * g_vibration_motor_gain, 0.0f, 1.0f) * 65535.0f);
 	};
 	const int count = SDL_NumJoysticks();
 	for (int i = 0; i < count; i++) {
@@ -654,7 +727,12 @@ void RumbleFromHaptics(float left, float right) {
 		if (pad == nullptr || SDL_GameControllerGetType(pad) != SDL_CONTROLLER_TYPE_PS5) {
 			continue;
 		}
-		(void)SDL_GameControllerRumble(pad, to_motor(held[0]), to_motor(held[1]), 100);
+		if (stop) {
+			(void)SDL_GameControllerRumble(pad, 0, 0, 0);
+		} else {
+			(void)SDL_GameControllerRumble(pad, to_motor(held[0]), to_motor(held[1]),
+			                               g_vibration_motor_ms);
+		}
 		return;
 	}
 }

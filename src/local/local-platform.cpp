@@ -53,6 +53,7 @@
 #include <x86intrin.h>
 #if defined(__linux__)
 #include <linux/membarrier.h>
+#include <malloc.h>
 #endif
 #endif
 
@@ -1627,6 +1628,16 @@ static bool IsSignedBy(const std::wstring& path, const wchar_t* signer_name) {
 	return nvidia;
 }
 
+// (StartHeapTrimmer: the process heap's free pages decommitted where possible; it is the CRT's
+// malloc's, the static CRT's too. Windows 8.1 and later. 0, else GetLastError.)
+static uint32_t TrimHeap() {
+	HEAP_OPTIMIZE_RESOURCES_INFORMATION info {};
+	info.Version = HEAP_OPTIMIZE_RESOURCES_CURRENT_VERSION;
+	if (HeapSetInformation(GetProcessHeap(), HeapOptimizeResources, &info, sizeof(info)) != 0)
+		return 0;
+	return static_cast<uint32_t>(GetLastError());
+}
+
 #else
 
 void SetThreadName(const char* name) {
@@ -1898,8 +1909,25 @@ uint64_t OpenFileForReading(const char* path) {
 	return fd < 0 ? 0 : static_cast<uint64_t>(fd) + 1;
 }
 
-bool WriteHeapHistogram(const char*) {
+bool WriteHeapHistogram(const char* path) {
+#if defined(__GLIBC__)
+	// glibc's account of its heap: the totals of all arenas (mallinfo2), then malloc_info's XML
+	// (each arena's free chunks by size, the mmapped blocks).
+	FILE* file = std::fopen(path, "w");
+	if (file == nullptr) return false;
+	const auto info = mallinfo2();
+	std::fprintf(file,
+	             "arenas %zu bytes from the system, %zu in use, %zu free (%zu at the tops, %zu in "
+	             "fastbins)\n"
+	             "mmapped blocks %zu bytes (%zu)\n\n",
+	             info.arena, info.uordblks, info.fordblks, info.keepcost, info.fsmblks, info.hblkhd,
+	             info.hblks);
+	const bool ok = malloc_info(0, file) == 0;
+	return std::fclose(file) == 0 && ok;
+#else
+	(void)path;
 	return false;
+#endif
 }
 
 bool StartAllocTrace(const char*) {
@@ -1949,6 +1977,17 @@ uint64_t AvailablePhysicalMemory() {
 	return available;
 }
 
+// (StartHeapTrimmer: glibc's free pages inside its arenas given back, not only the tops'. 0, else
+// 1: no malloc_trim.)
+static uint32_t TrimHeap() {
+#if defined(__GLIBC__)
+	malloc_trim(0);
+	return 0;
+#else
+	return 1;
+#endif
+}
+
 bool OpenVideoMemoryAdapter(const uint8_t* /*luid*/) {
 	return false;
 }
@@ -1970,5 +2009,44 @@ bool IsAmdSigned(const std::wstring& /*path*/) {
 }
 
 #endif
+
+void StartHeapTrimmer() {
+	const char* value = std::getenv("KYTY_HEAP_TRIM");
+	if (value == nullptr || value[0] != '1') return;
+	std::thread([] {
+		SetThreadName("Kyty.HeapTrim");
+		// The private memory after the last trim, or less since: the next trim waits for 64 MiB of
+		// growth over it (a steady heap is left alone). Private memory: Linux resident minus
+		// shared, Windows the commit charge; the working set shows the RAM.
+		uint64_t low = 0;
+		for (uint32_t round = 0;;) {
+			std::this_thread::sleep_for(std::chrono::seconds(30));
+			const auto before = ProcessMemory();
+			low               = std::min(low, before.private_bytes);
+			if (round != 0 && before.private_bytes < low + (uint64_t {64} << 20u)) continue;
+			const auto start = std::chrono::steady_clock::now();
+			if (const auto error = TrimHeap(); error != 0) {
+				std::printf("Heap trim: failed (error %u), stopped\n", error);
+				std::fflush(stdout);
+				return;
+			}
+			const double ms =
+			    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+			        .count();
+			const auto after = ProcessMemory();
+			low              = after.private_bytes;
+			if (round++ < 10) {
+				std::printf(
+				    "Heap trim: private memory %llu -> %llu MiB, working set %llu -> %llu MiB "
+				    "(%.1f ms)\n",
+				    static_cast<unsigned long long>(before.private_bytes >> 20u),
+				    static_cast<unsigned long long>(after.private_bytes >> 20u),
+				    static_cast<unsigned long long>(before.working_set >> 20u),
+				    static_cast<unsigned long long>(after.working_set >> 20u), ms);
+				std::fflush(stdout);
+			}
+		}
+	}).detach();
+}
 
 } // namespace LocalPlatform
