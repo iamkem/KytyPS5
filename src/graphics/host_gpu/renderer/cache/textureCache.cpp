@@ -23,6 +23,7 @@
 #include "common/hostException.h"
 #include "live-counters.h"
 #include "local-platform.h"
+#include "memory-pressure.h"
 #include "native-resource-state.h"
 
 #include <algorithm>
@@ -4739,21 +4740,19 @@ void TextureCache::EraseSlot(ImageId id) {
 // faults 73 -> 232), and they held their video memory for good. One the game draws again is made again from its bytes.
 // Passed over (to the back of the list): images whose bytes only the GPU has (no download here), depth images with a
 // stencil association (deleting depth deletes it too), unregistered ones.
-void TextureCache::RetireStaleImages(uint64_t tick) {
-	constexpr uint64_t RetireTicks    = 1200;
-	constexpr size_t   MaxRetirements = 16;
-	if (tick <= RetireTicks) return;
+void TextureCache::RetireStaleImages(uint64_t tick, uint64_t retire_ticks, size_t max_retirements) {
+	if (tick <= retire_ticks) return;
 	thread_local std::vector<ImageId> stale, kept;
 	stale.clear();
 	kept.clear();
-	m_lru_cache.ForEachItemBelow(tick - RetireTicks, [&](ImageId id) {
+	m_lru_cache.ForEachItemBelow(tick - retire_ticks, [&](ImageId id) {
 		const auto* owner = m_slot_images.try_get(id);
 		if (owner == nullptr || !owner->registered) return false;
 		if (owner->depth_id || owner->IsGpuModified())
 			kept.push_back(id);
 		else
 			stale.push_back(id);
-		return stale.size() == MaxRetirements;
+		return stale.size() == max_retirements;
 	});
 	for (const auto id: kept) TouchImage(m_slot_images[id]);
 	for (const auto id: stale) {
@@ -4799,7 +4798,24 @@ void TextureCache::RunGarbageCollector() {
 		RetireImage(item.second.id);
 		return true;
 	});
-	RetireStaleImages(tick);
+	// RAM Safety Mode: sample once per 60 flips (not every image or draw), with hysteresis.
+	// No live image is retired: RetireStaleImages keeps its existing LRU and ownership safeguards.
+	static thread_local MemoryPressure::Level pressure = MemoryPressure::Level::Normal;
+	if (MemoryPressure::Enabled() && tick % 60 == 0) {
+		const uint64_t available = LocalPlatform::AvailablePhysicalMemory();
+		const uint64_t physical  = LocalPlatform::PhysicalMemory();
+		const auto next = MemoryPressure::Next(pressure, available, physical);
+		if (next != pressure) {
+			std::printf("Adaptive RAM: %s -> %s; available %llu MiB of %llu MiB\n",
+			            MemoryPressure::Name(pressure), MemoryPressure::Name(next),
+			            static_cast<unsigned long long>(available >> 20u),
+			            static_cast<unsigned long long>(physical >> 20u));
+			std::fflush(stdout);
+		}
+		pressure = next;
+	}
+	const auto retire = MemoryPressure::Images(MemoryPressure::Enabled() ? pressure : MemoryPressure::Level::Normal);
+	RetireStaleImages(tick, retire.min_unused_flips, retire.max_images_per_flip);
 	if (TextureOffload::Enabled()) OffloadScan(tick);
 	if (m_graphics.CanReportMemoryUsage()) {
 		m_total_used_memory = m_graphics.GetDeviceMemoryUsage();

@@ -45,7 +45,7 @@
 <div class="field-col">
  <label class="field"><span>Memory Optimization</span><select id="ram-diet"><option value="true">On</option><option value="false">Off</option></select></label>
  <label class="field"><span>Extended Memory Mode</span><select id="ram16"><option value="true">On</option><option value="false">Off</option></select></label>
- <label class="field"><span>RAM Safety Mode (experimental)</span><select id="ram-safety"><option value="false">Off (current behavior)</option><option value="true">On (pause prefetch below 4 GB / 1 worker)</option></select></label>
+ <label class="field"><span>RAM Safety Mode (experimental)</span><select id="ram-safety"><option value="false">Off (current behavior)</option><option value="true">On (adaptive GPU cache + 4 GB shader guard)</option></select></label>
  <label class="field"><span>GPU Cache Budget</span><select id="vram"><option value="0">Auto</option><option value="10240">10 GB</option><option value="8192">8 GB</option><option value="6144">6 GB</option><option value="4096">4 GB</option></select></label>
  <label class="field"><span>Compatibility Guard</span><select id="redzone"><option value="true">On</option><option value="false">Off</option></select></label>
  <label class="field"><span>Safe GPU Mode</span><select id="safegpu"><option value="false">Off</option><option value="true">On (slower)</option></select></label>
@@ -58,7 +58,7 @@
  <div class="maintenance"><p>Maintenance</p><button id="shader-update">Update Missing Shaders</button><button id="shader-view-progress">View Progress…</button><button id="logs">Open Logs</button><button id="export-hints">Export Diagnostics</button></div>
  <div class="field-divider"></div>
  <div class="maintenance"><p>Steam integration</p><button id="steam-setup">Set Up Steam…</button><p id="steam-hint" class="muted-info">Play as a Non-Steam Game from Steam. The launcher exits with the game; Steamworks Rich Presence is unavailable.</p></div>
- <p class="muted-info">RAM Safety Mode slows background shader prefetch when RAM is low; it does not cap game RAM or guarantee protection from Windows memory errors. Keep the known-good launcher v9 if stability is in doubt.</p>
+ <p class="muted-info">RAM Safety Mode requires the isolated native candidate: it pauses background shader prefetch under 4 GB available, and cautiously retires only unused images sooner under RAM pressure. It does not cap game RAM or guarantee protection from Windows memory errors. Keep the known-good launcher v9 if stability is in doubt.</p>
  <p class="muted-info">Manage old and current shader caches in the <strong>Shader Cache</strong> tab.</p>
 </div></div></section>
 <section id="tab-mods" class="tab-panel" role="tabpanel">

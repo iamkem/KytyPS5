@@ -11,16 +11,24 @@ test('RAM Safety Mode is opt-in and preserves the known-good defaults',{skip:!lo
   const baseline=lib.buildPlayArgs(root,{...original,ram_safety:false});
   assert.ok(!baseline.args.join(' ').includes('KYTY_PREFETCH_MIN_AVAIL_MB='));
   assert.equal(lib.clean({}).ram_safety,false);
+  const candidate=path.join(root,'_Build','windows-ram-adaptive','kyty_emulator.exe');
+  if (!fs.existsSync(candidate)) {
+    assert.throws(()=>lib.buildPlayArgs(root,{...original,ram_safety:true}),/Adaptive RAM emulator is missing/);
+    return;
+  }
   const safety=lib.buildPlayArgs(root,{...original,ram_safety:true});
   const vars=safety.args[safety.args.indexOf('-Set')+1];
+  assert.match(vars,/KYTY_ADAPTIVE_RAM=1/);
   assert.match(vars,/KYTY_PREFETCH_MIN_AVAIL_MB=4096/);
   assert.match(vars,/KYTY_SHADER_PREFETCH_THREADS=1/);
   assert.match(vars,/KYTY_SHADER_FOLLOW_THREADS=1/);
-  assert.equal(safety.args[safety.args.indexOf('-Exe')+1],baseline.args[baseline.args.indexOf('-Exe')+1]);
+  assert.match(safety.args[safety.args.indexOf('-Exe')+1],/windows-ram-adaptive.*kyty_emulator\.exe$/i);
+  assert.notEqual(safety.args[safety.args.indexOf('-Exe')+1],baseline.args[baseline.args.indexOf('-Exe')+1]);
   assert.deepEqual(lib.applyPreset({...original,ram_safety:true},'Balanced').ram_safety,true);
   const probe=spawnSync(safety.command,[...safety.args,'-DryRun'],
     {cwd:root,encoding:'utf8',windowsHide:true,timeout:40000});
   assert.equal(probe.status,0,probe.stderr||probe.stdout);
+  assert.match(probe.stdout,/KYTY_ADAPTIVE_RAM=1/);
   assert.match(probe.stdout,/KYTY_PREFETCH_MIN_AVAIL_MB=4096/);
   assert.match(probe.stdout,/KYTY_SHADER_PREFETCH_THREADS=1/);
   assert.match(probe.stdout,/KYTY_SHADER_FOLLOW_THREADS=1/);

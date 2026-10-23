@@ -119,14 +119,18 @@ function gameValid(settings) {
 }
 function buildPlayArgs(root, raw) {
   const s = clean(raw);
-  // Keep the known-good emulator for the normal 4K output; 1080p DLSS is experimental.
+  // Keep the known-good emulator and chenxiao candidate intact. Adaptive mode is isolated.
   const experimentalHdDlss = s.upscaler === 'dlss' && s.output === '1080p';
-  const exe = experimentalHdDlss
-    ? path.join(root,'_Build','windows-chenxiao','kyty_emulator.exe')
-    : findEmulator(root);
-  if (!fs.existsSync(exe)) throw Error(experimentalHdDlss
-    ? 'Experimental 1080p DLSS emulator is missing (_Build/windows-chenxiao/kyty_emulator.exe). Build the chenxiao candidate first.'
-    : 'Emulator executable not found. Please build kyty_emulator first.');
+  const exe = s.ram_safety
+    ? path.join(root,'_Build','windows-ram-adaptive','kyty_emulator.exe')
+    : experimentalHdDlss
+      ? path.join(root,'_Build','windows-chenxiao','kyty_emulator.exe')
+      : findEmulator(root);
+  if (!fs.existsSync(exe)) throw Error(s.ram_safety
+    ? 'Adaptive RAM emulator is missing (_Build/windows-ram-adaptive/kyty_emulator.exe). Build the native RAM candidate first.'
+    : experimentalHdDlss
+      ? 'Experimental 1080p DLSS emulator is missing (_Build/windows-chenxiao/kyty_emulator.exe). Build the chenxiao candidate first.'
+      : 'Emulator executable not found. Please build kyty_emulator first.');
   if (!gameValid(s)) throw Error('Game not found. Choose a folder containing eboot.bin and sce_sys.');
   const [width,height] = s.resolution.split('x');
   const args = ['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(root,'run-windows.ps1'),
@@ -176,7 +180,7 @@ function buildPlayArgs(root, raw) {
   if (s.ram_safety) {
     // Guard only background shader work; on-demand gameplay shader compilation still runs.
     // The native prefetch worker already observes available physical RAM at each group boundary.
-    vars.push('KYTY_PREFETCH_MIN_AVAIL_MB=4096',
+    vars.push('KYTY_ADAPTIVE_RAM=1','KYTY_PREFETCH_MIN_AVAIL_MB=4096',
       'KYTY_SHADER_PREFETCH_THREADS=1','KYTY_SHADER_FOLLOW_THREADS=1');
   }
   if (s.vram_budget_mb) vars.push('KYTY_VRAM_BUDGET_MB='+s.vram_budget_mb);
