@@ -123,7 +123,7 @@ void Print(HANDLE process, DWORD pid) {
     os.dwLength = sizeof(os);
     const bool os_ok = GlobalMemoryStatusEx(&os) != 0;
     const auto census = Collect(process);
-    std::printf("RAM_CENSUS_VERSION=2 PID=%lu READ_ONLY=1\n", static_cast<unsigned long>(pid));
+    std::printf("RAM_CENSUS_VERSION=3 PID=%lu READ_ONLY=1\n", static_cast<unsigned long>(pid));
     if (process_ok) {
         std::printf("RAM_CENSUS_PROCESS working_set_mib=%llu private_bytes_mib=%llu pagefile_usage_mib=%llu\n",
             static_cast<unsigned long long>(pm.WorkingSetSize / MiB),
@@ -164,6 +164,32 @@ void Print(HANDLE process, DWORD pid) {
                 TypeName(type), labels[bucket], static_cast<unsigned long long>(counts[bucket]),
                 static_cast<double>(bytes[bucket]) / static_cast<double>(MiB));
         }
+    }
+    // Sizes rounded to the nearest MiB distinguish e.g. 32-MiB-sized
+    // allocation families from a large number of unrelated blocks. Round
+    // only for bucketing, retaining the actual committed byte sum.
+    struct Frequency { uint64_t count = 0; uint64_t bytes = 0; };
+    std::map<uint64_t, Frequency> private_sizes;
+    for (const auto& allocation : census.largest) {
+        if (allocation.type != MEM_PRIVATE || allocation.committed < MiB) continue;
+        const uint64_t rounded_mib = (allocation.committed + MiB / 2) / MiB;
+        auto& group = private_sizes[rounded_mib];
+        group.count++;
+        group.bytes += allocation.committed;
+    }
+    struct Sized { uint64_t size_mib, count, bytes; };
+    std::vector<Sized> sizes;
+    for (const auto& [mib, value] : private_sizes)
+        sizes.push_back({mib, value.count, value.bytes});
+    std::sort(sizes.begin(), sizes.end(), [](const Sized& a, const Sized& b) {
+        return a.bytes != b.bytes ? a.bytes > b.bytes : a.size_mib > b.size_mib;
+    });
+    for (size_t i = 0; i < std::min<size_t>(sizes.size(), 16); ++i) {
+        const auto& group = sizes[i];
+        std::printf("RAM_CENSUS_PRIVATE_SIZE rank=%zu approx_each_mib=%llu allocations=%llu committed_mib=%.2f\n",
+            i + 1, static_cast<unsigned long long>(group.size_mib),
+            static_cast<unsigned long long>(group.count),
+            static_cast<double>(group.bytes) / static_cast<double>(MiB));
     }
     // Always include the largest private owners, not only the global top 20.
     size_t private_listed = 0;
