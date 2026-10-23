@@ -6,6 +6,25 @@ const {spawnSync}=require('node:child_process');
 const lib=require('../logic.cjs');
 const root=path.resolve(__dirname,'..','..');
 const localReady=fs.existsSync(lib.findEmulator(root)) && lib.gameValid(lib.loadSettings(root));
+test('RAM Safety Mode is opt-in and preserves the known-good defaults',{skip:!localReady},()=>{
+  const original=lib.loadSettings(root);
+  const baseline=lib.buildPlayArgs(root,{...original,ram_safety:false});
+  assert.ok(!baseline.args.join(' ').includes('KYTY_PREFETCH_MIN_AVAIL_MB='));
+  assert.equal(lib.clean({}).ram_safety,false);
+  const safety=lib.buildPlayArgs(root,{...original,ram_safety:true});
+  const vars=safety.args[safety.args.indexOf('-Set')+1];
+  assert.match(vars,/KYTY_PREFETCH_MIN_AVAIL_MB=4096/);
+  assert.match(vars,/KYTY_SHADER_PREFETCH_THREADS=1/);
+  assert.match(vars,/KYTY_SHADER_FOLLOW_THREADS=1/);
+  assert.equal(safety.args[safety.args.indexOf('-Exe')+1],baseline.args[baseline.args.indexOf('-Exe')+1]);
+  assert.deepEqual(lib.applyPreset({...original,ram_safety:true},'Balanced').ram_safety,true);
+  const probe=spawnSync(safety.command,[...safety.args,'-DryRun'],
+    {cwd:root,encoding:'utf8',windowsHide:true,timeout:40000});
+  assert.equal(probe.status,0,probe.stderr||probe.stdout);
+  assert.match(probe.stdout,/KYTY_PREFETCH_MIN_AVAIL_MB=4096/);
+  assert.match(probe.stdout,/KYTY_SHADER_PREFETCH_THREADS=1/);
+  assert.match(probe.stdout,/KYTY_SHADER_FOLLOW_THREADS=1/);
+});
 test('Presets are actual graphics settings and preserve RAM16',()=>{
   const base={...lib.defaults,ram16_backing:true,ram_diet:true,lowlatency:true};
   for(const [name,p] of Object.entries(lib.presets)){

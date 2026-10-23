@@ -9,7 +9,7 @@ const defaults = Object.freeze({
   ratio: '16:9', quality: 'standard', vsync: false, hdr: false, framegen: 0,
   hud: 1, streamline: '', safegpu: false, upscaler: 'dlss', render_dlss: 1152,
   fsr: false, output: '4k', lowlatency: true, present_direct: false, antilag: false,
-  ram_diet: true, ram16_backing: true, vram_budget_mb: 0,
+  ram_diet: true, ram16_backing: true, ram_safety: false, vram_budget_mb: 0,
   discord_presence: false, discord_app_id: '', discord_large_image: ''
 });
 // Actual internal render resolution at 16:9. Display resolution is independent.
@@ -19,7 +19,7 @@ const presets = Object.freeze({
   Balanced: Object.freeze({render_dlss:1152,quality:'low',fsr:false,output:'4k',upscaler:'dlss'}),
   Quality: Object.freeze({render_dlss:1440,quality:'standard',fsr:false,output:'4k',upscaler:'dlss'})
 });
-const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing','discord_presence'];
+const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing','ram_safety','discord_presence'];
 const numericKeys = ['language','render','render_dlss','framegen','hud','vram_budget_mb'];
 function clean(candidate = {}) {
   if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) throw Error('Invalid settings object');
@@ -173,6 +173,12 @@ function buildPlayArgs(root, raw) {
   if (s.antilag) vars.push('KYTY_ANTI_LAG=1');
   if (s.ram_diet) vars.push('KYTY_RAM_DIET=1');
   if (s.ram16_backing) vars.push('KYTY_BACKING_FILE=1','KYTY_BACKING_ON_DEMAND=1');
+  if (s.ram_safety) {
+    // Guard only background shader work; on-demand gameplay shader compilation still runs.
+    // The native prefetch worker already observes available physical RAM at each group boundary.
+    vars.push('KYTY_PREFETCH_MIN_AVAIL_MB=4096',
+      'KYTY_SHADER_PREFETCH_THREADS=1','KYTY_SHADER_FOLLOW_THREADS=1');
+  }
   if (s.vram_budget_mb) vars.push('KYTY_VRAM_BUDGET_MB='+s.vram_budget_mb);
   if (vars.length) args.push('-Set',vars.join(','));
   return {command:path.join(process.env.SystemRoot || 'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe'),args};
