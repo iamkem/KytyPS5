@@ -7,6 +7,10 @@ const {spawnSync}=require('node:child_process');
 const versioned=require('./cache-generations.cjs');
 
 const KNOWN_FOLDERS=['local','warmup-v2','precompile-as-emulator','files'];
+// Even when compilation inputs appear inside an archived cache folder, they
+// remain protected. Prevent indirect deletion via cache-group selection.
+const PROTECTED_SHADER_INPUT=/\.(?:seeds|hints|files)(?:\.|$)|^pass-states\.json$/i;
+function includesShaderInput(files){return files.some(f=>PROTECTED_SHADER_INPUT.test(path.basename(f)));}
 // Single source of truth for the UI AND the deletion endpoint. No renderer-supplied policy is trusted.
 const CLEANUP_POLICY=Object.freeze({
   active: Object.freeze({level:'protected',label:'DO NOT DELETE',deletable:false,
@@ -46,7 +50,7 @@ function summarize(id,title,category,description,files,root){
     newest=Math.max(newest,stat.mtimeMs);
     oldest=Math.min(oldest,stat.mtimeMs);
   }
-  return {id,title,category,description,bytes,count:files.length,
+  return {id,title,category,description,hasProtectedInputs:includesShaderInput(files),bytes,count:files.length,
     oldest:new Date(oldest).toISOString(),newest:new Date(newest).toISOString(),
     // Paths are informational only and are never accepted from the renderer for deletion.
     location:path.relative(root,path.dirname(files[0])).replaceAll('\\','/')};
@@ -146,8 +150,13 @@ function groups(root){
     row.cleanupLevel=policy.level;
     row.cleanupLabel=policy.label;
     row.cleanupReason=policy.reason;
-    row.deletable=policy.deletable;
-    row.locked=!policy.deletable;
+    row.deletable=policy.deletable&&!row.hasProtectedInputs;
+    if(row.hasProtectedInputs){
+      row.cleanupLevel='protected';
+      row.cleanupLabel='KEEP — SHADER INPUTS';
+      row.cleanupReason='This cache group contains shader seeds, hints or source manifests required for future updates.';
+    }
+    row.locked=!row.deletable;
   }
   const rank={active:0,generation:1,archive:2,incompatible:2,aux:3};
   return results.sort((a,b)=>(rank[a.category]??9)-(rank[b.category]??9)||b.newest.localeCompare(a.newest));
@@ -208,6 +217,7 @@ async function trashSelected(root,ids,shell,processActive){
     chosen.push(...files.map(f=>safePath(cacheRoot,f)));
   }
   const uniqFiles=[...new Set(chosen)];
+  if(includesShaderInput(uniqFiles))throw Error('Protected shader seeds/hints cannot be deleted as a cache group');
   // Recycle Bin instead of rm/rmdir. Never follow symlink targets.
   for(const file of uniqFiles)await shell.trashItem(file);
   return {deletedGroups:unique.length,deletedFiles:uniqFiles.length};

@@ -194,7 +194,7 @@ function renderCache(){
    badge.textContent=item.cleanupLabel;
    line.append(name,badge);
    const details=document.createElement('span');
-   details.textContent=friendlyBytes(item.bytes)+' · '+new Date(item.newest).toLocaleString();
+   details.textContent=(item.location?item.location+' · ':'')+friendlyBytes(item.bytes)+' · '+new Date(item.newest).toLocaleString();
    const reason=document.createElement('small');reason.textContent=item.cleanupReason;
    description.append(line,details,reason);
    if(item.deletable){

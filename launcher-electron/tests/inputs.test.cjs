@@ -16,31 +16,35 @@ function fixture(){
  files('seeds-'+game+'.seeds.program');
  files('cache-fingerprint-'+game+'.json');
  files('unrelated.exe');
+ const release=path.join(dir,'tools','local','static-precompile');fs.mkdirSync(release,{recursive:true});
+ for(const name of ['hints-'+game+'.hints','hints-'+game+'.hints.backup-before-sync',
+   'files-'+game+'.files','pass-states.json'])fs.writeFileSync(path.join(release,name),name);
+ fs.writeFileSync(path.join(dir,'my-hints-'+game+'.hints'),'user recorded');
  return {dir,game,remove:()=>fs.rmSync(dir,{recursive:true,force:true})};
 }
 test('Shader Compilation Inputs are classified and protected independently from GPU cache',()=>{
  const x=fixture();
  try{
   const entries=inputs.inventory(x.dir);
-  assert.equal(entries.length,6);
-  assert.equal(entries.find(f=>f.kind==='base').locked,true);
-  assert.equal(entries.find(f=>f.kind==='fingerprint').locked,true);
-  assert.equal(entries.find(f=>f.kind==='legacy').cleanupLevel,'safe');
-  assert.equal(entries.find(f=>f.title.startsWith('hinted-')).cleanupLevel,'review');
+  assert.equal(entries.length,11);
+  assert.equal(entries.every(f=>f.locked&&!f.deletable&&f.cleanupLevel==='protected'),true);
+  for(const name of ['seeds-'+x.game+'.seeds','hinted-'+x.game+'.seeds',
+   'released-'+x.game+'.seeds','recorded-play-'+x.game+'.hints',
+   'hints-'+x.game+'.hints','hints-'+x.game+'.hints.backup-before-sync',
+   'files-'+x.game+'.files','pass-states.json','my-hints-'+x.game+'.hints'])
+    assert.equal(entries.find(f=>f.title===name)?.locked,true,'Must lock '+name);
+  assert.equal(entries.find(f=>f.kind==='legacy').locked,true);
   assert.equal(entries.some(f=>f.title==='unrelated.exe'),false);
  }finally{x.remove();}
 });
-test('Cannot delete essential seeds/fingerprint, can recycle only explicitly allowed generated inputs',async()=>{
+test('Cache Manager cannot delete any game-related seed/hint even via direct backend invocation',async()=>{
  const x=fixture();const moved=[];const shell={trashItem:async file=>moved.push(path.basename(file))};
  try{
-  const [base]=inputs.inventory(x.dir).filter(f=>f.kind==='base');
-  await assert.rejects(inputs.remove(x.dir,[base.id],shell,()=>{}),/locked/);
+  for(const item of inputs.inventory(x.dir))
+    await assert.rejects(inputs.remove(x.dir,[item.id],shell,()=>{}),/locked/,item.title);
   await assert.rejects(inputs.remove(x.dir,['unrelated.exe'],shell,()=>{}),/changed/);
   await assert.rejects(inputs.remove(x.dir,['hinted-'+x.game+'.seeds'],shell,()=>{throw Error('Busy');}),/Busy/);
   assert.deepEqual(moved,[]);
-  const result=await inputs.remove(x.dir,['seeds-'+x.game+'.seeds.program'],shell,()=>{});
-  assert.equal(result.deletedFiles,1);
-  assert.deepEqual(moved,['seeds-'+x.game+'.seeds.program']);
  }finally{x.remove();}
 });
 test('Content fingerprint ignores input timestamps but rejects content changes or replaced GPU cache',()=>{

@@ -83,8 +83,8 @@
   <div class="cache-update-line"><span id="cache-update-status">Shader update: Not started</span><button id="cache-update-view">View Progress…</button></div>
   <div id="cache-list" class="cache-list"><p>Reading cache folders…</p></div>
   <div class="cache-foot"><span id="cache-selected">No cache selected</span><button id="cache-delete" disabled>Move selected to Recycle Bin…</button></div>
-  <div class="cache-inputs-actions"><strong>Shader Compilation Inputs</strong><span>Separate from GPU pipeline cache</span><button id="inputs-remove" disabled>Remove selected inputs…</button></div>
-  <p class="cache-note">GREEN — safe to clean: interrupted archived shards. AMBER — saved backups: review before removal. GREY — active / performance data: protected, cannot select. Nothing is deleted automatically.</p>
+  <div class="cache-inputs-actions"><strong>Shader Compilation Inputs</strong><span>All seeds, release hints, recorded-play hints, pass states and source manifests are protected. They cannot be removed in Cache Manager.</span><button id="inputs-remove" disabled>Protected — no deletion</button></div>
+  <p class="cache-note">GREEN — old interrupted shards only. AMBER — saved cache backups, review carefully. GREY — all active data, seeds, hints and compilation inputs are locked; deletion is refused even if requested directly. Nothing is deleted automatically.</p>
  </div>
 </section>
 </div>

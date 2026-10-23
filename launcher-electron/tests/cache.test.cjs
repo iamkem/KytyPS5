@@ -58,6 +58,17 @@ test('Protected auxiliary caches cannot be removed via direct IPC even if render
     assert.equal(moved.length,0);
   }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
+test('An archived cache containing shader hints becomes fully undeletable',async()=>{
+  const {root,make}=makeRoot();const moved=[];
+  try{
+    make('_PipelineCache/archived-shards/2026-10-22-1226-incomplete/recorded-play-PPSA01341_01.007.000.hints');
+    const item=cache.groups(root).find(x=>x.category==='archive');
+    assert.equal(item.cleanupLevel,'protected');
+    assert.equal(item.deletable,false);
+    await assert.rejects(cache.trashSelected(root,[item.id],{trashItem:async f=>moved.push(f)},()=>false),/locked/i);
+    assert.deepEqual(moved,[]);
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
 test('Cache deletion refuses bad IDs and a running emulator',async()=>{
   const {root}=makeRoot();const moved=[];
   const shell={trashItem:async full=>moved.push(full)};

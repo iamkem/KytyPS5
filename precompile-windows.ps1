@@ -155,6 +155,16 @@ if (!$Game) { $Game = $lastGame }
 $info = Read-GameParam $Game
 if (!$info) { throw "no sce_sys\param.json in $Game (-Game <folder or .zar>, or start the game once to choose it)" }
 $gameId = "$($info.titleId)_$($info.contentVersion)"
+# Update Missing Shaders checks the published version-specific hints before the
+# native cache fast-path. Offline/error -> preserve installed hints and carry on.
+# Seeds are generated when missing; use -RefreshSeeds for explicit re-extraction.
+if ($Incremental) {
+	$hintsSync = Join-Path $PSScriptRoot 'tools\local\static-precompile\sync-release-hints.ps1'
+	if (Test-Path -LiteralPath $hintsSync) {
+		. $hintsSync
+		Sync-KytyReleasedHints $PSScriptRoot $gameId
+	} else { Write-Host 'hints: updater missing; keeping installed hints' }
+}
 # A durable marker is created before even making seeds. A killed/interrupted
 # update must NEVER look 'completed' because it merged only some shards.
 $resumeMarker = Join-Path $PSScriptRoot "_PipelineCache\static\$gameId.resume-required"
