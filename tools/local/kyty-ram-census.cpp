@@ -123,7 +123,7 @@ void Print(HANDLE process, DWORD pid) {
     os.dwLength = sizeof(os);
     const bool os_ok = GlobalMemoryStatusEx(&os) != 0;
     const auto census = Collect(process);
-    std::printf("RAM_CENSUS_VERSION=1 PID=%lu READ_ONLY=1\n", static_cast<unsigned long>(pid));
+    std::printf("RAM_CENSUS_VERSION=2 PID=%lu READ_ONLY=1\n", static_cast<unsigned long>(pid));
     if (process_ok) {
         std::printf("RAM_CENSUS_PROCESS working_set_mib=%llu private_bytes_mib=%llu pagefile_usage_mib=%llu\n",
             static_cast<unsigned long long>(pm.WorkingSetSize / MiB),
@@ -142,8 +142,39 @@ void Print(HANDLE process, DWORD pid) {
         static_cast<unsigned long long>(census.other_committed / MiB),
         static_cast<double>(census.reserve_bytes) / static_cast<double>(GiB),
         static_cast<unsigned long long>(census.regions));
-    // Ignore tiny allocations to keep the output focused on actionable multi-MiB owners.
-    // On --self the list may correctly be empty.
+    // Allocation-base cohorts reveal whether multi-GiB private commit lives in
+    // one cache arena, medium-sized blocks, or numerous small host allocations.
+    // Unlike the TOP 20 list these include every committed allocation group.
+    constexpr std::array<uint64_t, 7> bounds {64 * 1024ull, 256 * 1024ull, MiB, 4 * MiB,
+                                              16 * MiB, 64 * MiB, 256 * MiB};
+    constexpr std::array<const char*, 8> labels {"lt64k", "64k_to_256k", "256k_to_1m",
+        "1m_to_4m", "4m_to_16m", "16m_to_64m", "64m_to_256m", "ge256m"};
+    for (const DWORD type : {MEM_PRIVATE, MEM_MAPPED}) {
+        std::array<uint64_t, 8> counts{};
+        std::array<uint64_t, 8> bytes{};
+        for (const auto& allocation : census.largest) {
+            if (allocation.type != type) continue;
+            const size_t bucket = static_cast<size_t>(
+                std::upper_bound(bounds.begin(), bounds.end(), allocation.committed) - bounds.begin());
+            counts[bucket]++;
+            bytes[bucket] += allocation.committed;
+        }
+        for (size_t bucket = 0; bucket < counts.size(); ++bucket) {
+            std::printf("RAM_CENSUS_COHORT type=%s bucket=%s allocations=%llu committed_mib=%.2f\n",
+                TypeName(type), labels[bucket], static_cast<unsigned long long>(counts[bucket]),
+                static_cast<double>(bytes[bucket]) / static_cast<double>(MiB));
+        }
+    }
+    // Always include the largest private owners, not only the global top 20.
+    size_t private_listed = 0;
+    for (const auto& a : census.largest) {
+        if (private_listed >= 12) break;
+        if (a.type != MEM_PRIVATE || a.committed < 8 * MiB) continue;
+        std::printf("RAM_CENSUS_TOP_PRIVATE rank=%zu allocation_base=0x%llx commit_mib=%.2f regions=%u\n",
+            ++private_listed, static_cast<unsigned long long>(a.base),
+            static_cast<double>(a.committed) / static_cast<double>(MiB), a.regions);
+    }
+    // Ignore tiny allocations to keep the global output focused on large owners.
     size_t listed = 0;
     for (const auto& a : census.largest) {
         if (a.committed < 8 * MiB || listed >= 20) break;
