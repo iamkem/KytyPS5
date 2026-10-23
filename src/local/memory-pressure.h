@@ -54,6 +54,25 @@ struct RetirePolicy {
     }
 }
 
+// Do not force release of driver handles: caller still requires a static-store
+// remake recipe, no pending optimized build, and the full Vulkan idle horizon.
+struct PipelinePolicy {
+    uint32_t idle_seconds;
+    uint32_t max_evictions_per_scan;
+};
+[[nodiscard]] constexpr PipelinePolicy Pipelines(Level level) {
+    switch (level) {
+    case Level::Critical: return {90, 192};
+    case Level::Elevated: return {120, 128};
+    default: return {180, 256};
+    }
+}
+
+// Temporary-file caching is intentionally preferred for normal launches.
+// Adaptive launches allow Windows to write cold mapped guest pages to disk,
+// rather than hinting that a large temporary file should remain cached.
+[[nodiscard]] constexpr bool PreferTemporaryBacking(bool adaptive) { return !adaptive; }
+
 [[nodiscard]] inline bool Enabled() {
     static const bool enabled = [] {
 #if defined(_WIN32)

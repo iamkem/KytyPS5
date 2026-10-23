@@ -21,6 +21,13 @@ static_assert(Images(Level::Normal).min_unused_flips == 1200);
 static_assert(Images(Level::Elevated).min_unused_flips == 900);
 static_assert(Images(Level::Critical).min_unused_flips == 720);
 static_assert(Images(Level::Critical).max_images_per_flip == 24);
+static_assert(MemoryPressure::Pipelines(Level::Normal).idle_seconds == 180);
+static_assert(MemoryPressure::Pipelines(Level::Elevated).idle_seconds == 120);
+static_assert(MemoryPressure::Pipelines(Level::Critical).idle_seconds == 90);
+static_assert(MemoryPressure::Pipelines(Level::Normal).max_evictions_per_scan == 256);
+static_assert(MemoryPressure::Pipelines(Level::Critical).max_evictions_per_scan == 192);
+static_assert(MemoryPressure::PreferTemporaryBacking(false));
+static_assert(!MemoryPressure::PreferTemporaryBacking(true));
 
 int main() {
     assert(MemoryPressure::ForPhysical(8 * GiB).elevated == 2 * GiB);

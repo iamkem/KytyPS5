@@ -33,6 +33,7 @@
 #include "live-counters.h"
 #include "device-fault.h"
 #include "local-platform.h"
+#include "memory-pressure.h"
 #include "slow-log.h"
 #include "startup-progress.h"
 
@@ -2232,6 +2233,35 @@ struct {
 	std::atomic<uint64_t> kept {0}, evicted {0}, remade {0}, remake_us {0}, remake_max_us {0}, scene {0};
 } g_pipeline_evictions;
 
+// KYTY_RAM_DIET=1: less resident RAM held by the driver, no working-set trimming. Pipelines no binding used for
+// KYTY_PIPELINE_EVICT_SECONDS (default 180) leave whatever the video memory (each held ~220 KB of the NVIDIA driver's
+// RAM), and the unoptimized pipelines an optimized build replaced are destroyed RamDietReplacedSeconds after it (they
+// were kept until exit; no command buffer is kept across frames, GPU work is never a minute behind).
+bool RamDietEnabled() {
+	static const bool on = [] {
+		const char* value = std::getenv("KYTY_RAM_DIET");
+		return value != nullptr && std::string_view(value) == "1";
+	}();
+	return on;
+}
+constexpr int64_t  RamDietReplacedSeconds = 60;
+constexpr uint64_t RamDietPipelineBytes   = 220 * 1024;
+std::atomic<uint64_t> g_ram_diet_evicted {0}, g_ram_diet_replaced {0};
+// At most a line a minute: the totals so far.
+void RamDietReport() {
+	static auto logged = std::chrono::steady_clock::time_point {};
+	const auto  now    = std::chrono::steady_clock::now();
+	if (now - logged < std::chrono::seconds(60)) return;
+	const auto evicted = g_ram_diet_evicted.load(std::memory_order_relaxed);
+	const auto replaced = g_ram_diet_replaced.load(std::memory_order_relaxed);
+	if (evicted + replaced == 0) return;
+	logged = now;
+	std::printf("[ram-diet] driver pipelines released: %llu idle evicted + %llu replaced unoptimized, ~%llu MiB\n",
+	            static_cast<unsigned long long>(evicted), static_cast<unsigned long long>(replaced),
+	            static_cast<unsigned long long>(((evicted + replaced) * RamDietPipelineBytes) >> 20u));
+	std::fflush(stdout);
+}
+
 // KYTY_PIPELINE_EVICT: 0 keeps every pipeline, 2 (a test) evicts whatever the video memory in use; set, it evicts on any
 // GPU, else only on one short of video memory (GraphicContext::small_video_memory, under 12 GiB). KYTY_PIPELINE_EVICT_SECONDS:
 // the idle time (default 180 s, at least 5).
@@ -2249,6 +2279,11 @@ const EvictSettings& PipelineEvictSettings() {
 		out.set               = evict != nullptr && *evict != '\0';
 		out.on                = !out.set || std::string_view(evict) != "0";
 		out.always            = out.set && std::string_view(evict) == "2";
+		if ((RamDietEnabled() || MemoryPressure::Enabled()) &&
+		    !(evict != nullptr && std::string_view(evict) == "0")) {
+			out.set = true;
+			out.on  = true;
+		}
 		if (seconds != nullptr && *seconds != '\0')
 			out.idle = std::chrono::seconds(std::max<uint64_t>(std::strtoull(seconds, nullptr, 10), 5));
 		return out;
@@ -2352,15 +2387,55 @@ void PipelineCache::EvictIdlePipelines() {
 		m_scene_swept      = false;
 	}
 	if (!settings.on || flip % CheckFlips != 0) return;
+	// Sample physical RAM only on the existing periodic pipeline sweep. 1 GiB hysteresis
+	// avoids alternating driver pipeline destruction/recreation near the threshold.
+	static MemoryPressure::Level adaptive_pressure = MemoryPressure::Level::Normal;
+	if (MemoryPressure::Enabled()) {
+		const auto available = LocalPlatform::AvailablePhysicalMemory();
+		const auto total     = LocalPlatform::PhysicalMemory();
+		const auto next      = MemoryPressure::Next(adaptive_pressure, available, total);
+		if (next != adaptive_pressure) {
+			std::printf("Adaptive pipelines: %s -> %s (available %llu MiB)\n",
+			            MemoryPressure::Name(adaptive_pressure), MemoryPressure::Name(next),
+			            static_cast<unsigned long long>(available >> 20u));
+			std::fflush(stdout);
+		}
+		adaptive_pressure = next;
+	}
+	const bool ram_pressure = MemoryPressure::Enabled() && adaptive_pressure != MemoryPressure::Level::Normal;
+	const auto adaptive_policy = MemoryPressure::Pipelines(adaptive_pressure);
+	// Under pressure, only the idle horizon gets shorter. The existing remake
+	// eligibility, binding age and pending-optimized-build checks remain in place.
+	const auto idle_horizon = ram_pressure
+	    ? std::min(settings.idle, std::chrono::duration_cast<std::chrono::nanoseconds>(
+	                               std::chrono::seconds(adaptive_policy.idle_seconds)))
+	    : settings.idle;
+	const size_t max_evictions = ram_pressure ? adaptive_policy.max_evictions_per_scan : MaxEvictions;
 	const bool scene_left = !m_scene_swept && now - m_scene_since >= SceneSettle;
 	uint64_t video = 0, budget = 0;
 	const bool known = m_graphics.QueryLocalVideoMemory(&video, &budget);
-	m_evict_pressure = known && (settings.always || video + EvictMargin >= budget);
+	m_evict_pressure = (known && (settings.always || video + EvictMargin >= budget)) || RamDietEnabled() || ram_pressure;
+	if (RamDietEnabled()) {
+		// Replaced unoptimized pipelines past RamDietReplacedSeconds (pushed in time order).
+		const auto old = (now - std::chrono::seconds(RamDietReplacedSeconds)).time_since_epoch().count();
+		size_t     done = 0;
+		while (done < m_replaced_at.size() && m_replaced_at[done] <= old) {
+			DeviceFault::ForgetPipeline(static_cast<VkPipeline>(m_replaced_pipelines[done]));
+			m_graphics.device.destroyPipeline(m_replaced_pipelines[done], nullptr);
+			done++;
+		}
+		if (done != 0) {
+			m_replaced_pipelines.erase(m_replaced_pipelines.begin(), m_replaced_pipelines.begin() + static_cast<ptrdiff_t>(done));
+			m_replaced_at.erase(m_replaced_at.begin(), m_replaced_at.begin() + static_cast<ptrdiff_t>(done));
+			g_ram_diet_replaced.fetch_add(done, std::memory_order_relaxed);
+		}
+		RamDietReport();
+	}
 	if (!m_evict_pressure && !scene_left) return;
 	// The newest flip that began by the horizon among those the ring holds; none when even the oldest began after it.
 	uint32_t below = 0; // bound in an earlier flip: idle since then
 	if (m_evict_pressure) {
-		const auto horizon = (now - settings.idle).time_since_epoch().count();
+		const auto horizon = (now - idle_horizon).time_since_epoch().count();
 		uint32_t   first   = flip - std::min<uint32_t>(flip - 1, static_cast<uint32_t>(m_flip_times.size() - 1)), last = flip;
 		if (m_flip_times[first % m_flip_times.size()] <= horizon) {
 			while (first < last) {
@@ -2375,7 +2450,7 @@ void PipelineCache::EvictIdlePipelines() {
 	if (scene_left) scene_recipes = SceneTags::Recipes(SceneTags::Current());
 	size_t     evicted = 0, left = 0;
 	const auto evict   = [&](Pipeline& pipeline) {
-		if (evicted == MaxEvictions || pipeline.pipeline == nullptr || pipeline.remake == nullptr || pipeline.unoptimized ||
+		if (evicted == max_evictions || pipeline.pipeline == nullptr || pipeline.remake == nullptr || pipeline.unoptimized ||
 		    pipeline.optimized != nullptr)
 			return;
 		const bool idle  = pipeline.last_flip < below;
@@ -2386,10 +2461,11 @@ void PipelineCache::EvictIdlePipelines() {
 		pipeline.pipeline = nullptr;
 		evicted++;
 		left += idle ? 0 : 1;
+		if (RamDietEnabled()) g_ram_diet_evicted.fetch_add(1, std::memory_order_relaxed);
 	};
 	for (auto& [key, pipeline]: m_graphics_pipelines) evict(*pipeline);
 	for (auto& [id, pipeline]: m_compute_pipelines) evict(*pipeline);
-	if (scene_left && evicted < MaxEvictions) m_scene_swept = true;
+	if (scene_left && evicted < max_evictions) m_scene_swept = true;
 	g_pipeline_evictions.scene.fetch_add(left, std::memory_order_relaxed);
 	if (scene_left && m_scene_swept) {
 		std::printf("Pipelines of the worlds left (%s for %lld s): %llu evicted in all, %llu made again (%.0f ms)\n",
@@ -2430,6 +2506,7 @@ void PipelineCache::PromoteOptimized() {
 		if (!build.done.load(std::memory_order_acquire)) return false;
 		if (build.pipeline != nullptr) {
 			m_replaced_pipelines.push_back(pipeline->pipeline);
+			if (RamDietEnabled()) m_replaced_at.push_back(std::chrono::steady_clock::now().time_since_epoch().count());
 			pipeline->pipeline    = build.pipeline;
 			pipeline->unoptimized = false;
 		}
