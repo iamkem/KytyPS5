@@ -179,10 +179,14 @@ struct Stream {
 };
 
 namespace {
+// The large buffers of the sender and of Queue live on the heap, not the stack. With LTO, inlining SDL's
+// functions (built with /Gs1048576) gives their callers SDL's stack probe size, so a frame of more than a
+// page skipped the thread's guard page: the sender thread crashed at its first call (0xC0000005).
 template <size_t N>
 void Mix(SDL_AudioStream* stream, std::array<float, N>& mixed) {
-	std::array<float, N> pcm {};
-	const int            bytes = SDL_AudioStreamGet(stream, pcm.data(), static_cast<int>(sizeof(pcm)));
+	static thread_local std::vector<float> pcm;
+	pcm.assign(N, 0.0f);
+	const int bytes = SDL_AudioStreamGet(stream, pcm.data(), static_cast<int>(N * sizeof(float)));
 	for (int i = 0; i < std::max(0, bytes) / static_cast<int>(sizeof(float)); i++) {
 		mixed[i] += pcm[i];
 	}
@@ -292,9 +296,12 @@ std::vector<PendingReport> Prepare(uint64_t now) {
 			if (session->failed || now < session->next_send) {
 				continue;
 			}
-			PendingReport report {session, session->generation.load()};
-			if (PrepareReport(*session, report, now)) {
-				pending.push_back(std::move(report));
+			auto& report      = pending.emplace_back();
+			report.session    = session;
+			report.generation = session->generation.load();
+			if (!PrepareReport(*session, report, now)) {
+				pending.pop_back();
+			} else {
 				// Regain timing after a late HID write without sending reports in a burst. Reset the
 				// cadence only on the first report.
 				session->next_send = session->next_send == 0
@@ -425,9 +432,9 @@ uint64_t Queue(Stream* stream, const float* stereo, uint32_t frames) {
 	if (queued + converted > max_out) {
 		// Discard complete old report slots, preserving the newest queued audio. Clearing the whole
 		// stream here creates an audible gap after a brief Windows Bluetooth write stall.
-		std::array<float, 2 * OPUS_FRAMES * 2> discarded {};
+		std::vector<float> discarded(2 * OPUS_FRAMES * 2);
 		const int discard_bytes = stream->speaker
-		                              ? static_cast<int>(sizeof(discarded))
+		                              ? static_cast<int>(discarded.size() * sizeof(float))
 		                              : static_cast<int>(HAPTIC_REPORT_FLOATS * sizeof(float));
 		const int target        = max_out - converted;
 		while (queued > target) {
