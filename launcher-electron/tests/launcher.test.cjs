@@ -57,6 +57,17 @@ test('Shader interrupted merge cannot mark a completed fingerprint',()=>{
   assert.match(source,/Remove-Item -LiteralPath \$resumeMarker/);
 });
 
+test('Shader incremental cache fast-path rejects changed seeds and newer hints',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'..','..','precompile-windows.ps1'),'utf8');
+  assert.match(source,/\$inputsChanged = \$canVerifyInputs -and !\$fingerprintMatches/);
+  assert.match(source,/if \(!\$inputsChanged -and \(\(\$inspectionText -match 'static cache current'/);
+  const check=source.indexOf('$inputsChanged = $canVerifyInputs');
+  const accept=source.indexOf("cache:      VALID for current GPU/driver and shaders;");
+  assert.ok(check>=0 && accept>check,'check input content before accepting native --status');
+  // -RefreshSeeds is explicitly opt-in: ordinary incremental updates do not re-extract game files.
+  assert.match(source,/\$remake = \$RefreshSeeds -and \(Test-Path \$Seeds\)/);
+});
+
 test('Presets are actual graphics settings and preserve RAM16',()=>{
   const base={...lib.defaults,ram16_backing:true,ram_diet:true,lowlatency:true};
   for(const [name,p] of Object.entries(lib.presets)){

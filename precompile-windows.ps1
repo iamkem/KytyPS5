@@ -198,11 +198,22 @@ if ($Incremental -and !$resumePending -and !$ReplaceCache -and !$RefreshSeeds -a
 				$fingerprint = Get-KytyShaderFingerprint $PSScriptRoot $Seeds $gameId
 			}
 		}
+		# Native --status knows about the base seeds, but not newer recorded-play hints.
+		# A changed content fingerprint must re-plan incremental work, even when the
+		# native translator says the existing binaries are current. Never stamp a new
+		# fingerprint onto an old cache before missing pipelines have been compiled.
+		$canVerifyInputs = $null -ne $fingerprint -and
+			(Get-Command Test-KytyShaderFingerprint -ErrorAction SilentlyContinue)
+		$fingerprintMatches = !$canVerifyInputs -or
+			(Test-KytyShaderFingerprint $PSScriptRoot $gameId $fingerprint)
+		$inputsChanged = $canVerifyInputs -and !$fingerprintMatches
 		$validated = $inspectionText -match 'static cache outdated' -and
 			$inspectionText -match 'translator features current' -and !$pending.Count -and
-			(Get-Command Test-KytyShaderFingerprint -ErrorAction SilentlyContinue) -and
-			(Test-KytyShaderFingerprint $PSScriptRoot $gameId $fingerprint)
-		if ($inspectionText -match 'static cache current' -and !$pending.Count -or $validated) {
+			$canVerifyInputs -and $fingerprintMatches
+		if ($inputsChanged) {
+			Write-Host 'cache:      Seed, hints or translator input fingerprint changed; checking missing pipelines.'
+		}
+		if (!$inputsChanged -and (($inspectionText -match 'static cache current' -and !$pending.Count) -or $validated)) {
 			if ($validated) { Write-Host 'cache:      CONTENT MATCH — seeds/hints/shader source unchanged; outdated timestamp ignored safely.' }
 			if ($inspectionText -match 'inputs current') {
 				if (!$validated -and (Get-Command Save-KytyShaderFingerprint -ErrorAction SilentlyContinue)) {
