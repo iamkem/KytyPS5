@@ -36,6 +36,8 @@ class GpuResourceManager;
 using BufferId = Common::SlotId;
 inline constexpr BufferId NULL_BUFFER_ID {0};
 
+class ChunkedUploadStaging; // Stage 7: opt-in 16 MiB upload blocks for ordinary buffer copies.
+
 class BufferCache {
 public:
 	static constexpr uint32_t CACHING_PAGEBITS  = 14;
@@ -375,6 +377,10 @@ private:
 	std::array<WriteMemo, 4096> m_write_memo {};
 	MemoryTracker                                     m_memory_tracker;
 	StreamBuffer                                      m_staging_buffer;
+	std::unique_ptr<ChunkedUploadStaging>            m_chunked_upload;
+	// Bytes replayed from the existing pageable guest backing, not physical SSD IO.
+	uint64_t                                          m_stage7_guest_replay_bytes = 0;
+	uint64_t                                          m_stage7_guest_replay_count = 0;
 	// ObtainBufferForImage (KYTY_ASYNC_UPLOAD=2): the backing pieces of an image upload.
 	std::vector<std::pair<const uint8_t*, uint64_t>>  m_backing_pieces;
 	// The upload worker's copies of guest [vaddr, vaddr + size) to `staging`; false when it reads the mapped parts

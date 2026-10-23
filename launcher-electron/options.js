@@ -12,7 +12,7 @@ const sizes={'16:9':['1280x720','1920x1080','2560x1440','3840x2160'],
  '21:9':['2560x1080','3440x1440','3840x1600','5120x2160'],
  '32:9':['3840x1080','5120x1440','7680x2160']};
 const boolKeys={'vsync':'vsync','fps120':'fps120','lowlatency':'lowlatency',
- 'fsr':'fsr','ram-diet':'ram_diet','ram16':'ram16_backing','ram-safety':'ram_safety','texture-offload':'texture_offload','redzone':'redzone','safegpu':'safegpu'};
+ 'fsr':'fsr','ram-diet':'ram_diet','ram16':'ram16_backing','ram-safety':'ram_safety','texture-offload':'texture_offload','stage7-ram':'stage7_ram','redzone':'redzone','safegpu':'safegpu'};
 const numberKeys={'framegen':'framegen','hud':'hud','vram':'vram_budget_mb','language':'language'};
 const plainKeys={'ratio':'ratio','resolution':'resolution','upscaler':'upscaler','output':'output','quality':'quality'};
 function set(id,value){const el=$(id);if(el.type==='checkbox')el.checked=Boolean(value);else el.value=String(value);}

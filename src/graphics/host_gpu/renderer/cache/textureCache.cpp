@@ -24,6 +24,7 @@
 #include "live-counters.h"
 #include "local-platform.h"
 #include "memory-pressure.h"
+#include "stage7-resource-policy.h"
 #include "native-resource-state.h"
 
 #include <algorithm>
@@ -4838,6 +4839,18 @@ void TextureCache::RunGarbageCollector() {
 	}
 	const auto retire = MemoryPressure::Images(MemoryPressure::Enabled() ? pressure : MemoryPressure::Level::Normal);
 	RetireStaleImages(tick, retire.min_unused_flips, retire.max_images_per_flip);
+	// Stage 7: the image reuse pool contains only images whose cache owners
+	// already released them. Under critical host RAM pressure, return this
+	// *idle* VMA pool to the driver; live/GPU-modified images remain intact.
+	// Rate-limit to avoid driver churn or a per-frame texture reallocation loop.
+	if (Stage7::Enabled() && tick % 120 == 0 &&
+	    Stage7::HostCritical(LocalPlatform::AvailablePhysicalMemory(), LocalPlatform::PhysicalMemory())) {
+		m_graphics.TrimImagePool();
+		if (tick % 600 == 0) {
+			std::printf("Stage7 host GC: trimmed idle Vulkan image reuse pool at flip %llu\n",
+			            static_cast<unsigned long long>(tick));
+		}
+	}
 	if (TextureOffload::Enabled()) OffloadScan(tick);
 	if (m_graphics.CanReportMemoryUsage()) {
 		m_total_used_memory = m_graphics.GetDeviceMemoryUsage();

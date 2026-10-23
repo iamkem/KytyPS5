@@ -9,7 +9,7 @@ const defaults = Object.freeze({
   ratio: '16:9', quality: 'standard', vsync: false, hdr: false, framegen: 0,
   hud: 1, streamline: '', safegpu: false, upscaler: 'dlss', render_dlss: 1152,
   fsr: false, output: '4k', lowlatency: true, present_direct: false, antilag: false,
-  ram_diet: true, ram16_backing: true, ram_safety: false, texture_offload: false, vram_budget_mb: 0,
+  ram_diet: true, ram16_backing: true, ram_safety: false, texture_offload: false, stage7_ram: false, vram_budget_mb: 0,
   discord_presence: false, discord_app_id: '', discord_large_image: ''
 });
 // Actual internal render resolution at 16:9. Display resolution is independent.
@@ -19,7 +19,7 @@ const presets = Object.freeze({
   Balanced: Object.freeze({render_dlss:1152,quality:'low',fsr:false,output:'4k',upscaler:'dlss'}),
   Quality: Object.freeze({render_dlss:1440,quality:'standard',fsr:false,output:'4k',upscaler:'dlss'})
 });
-const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing','ram_safety','texture_offload','discord_presence'];
+const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing','ram_safety','texture_offload','stage7_ram','discord_presence'];
 const numericKeys = ['language','render','render_dlss','framegen','hud','vram_budget_mb'];
 function clean(candidate = {}) {
   if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) throw Error('Invalid settings object');
@@ -119,14 +119,22 @@ function gameValid(settings) {
 }
 function buildPlayArgs(root, raw) {
   const s = clean(raw);
+  // Stage 7 remains explicit opt-in. Never combine RAM residency trials with
+  // probe instrumentation or unprotected guest memory.
+  if (s.stage7_ram && (!s.ram_safety || !s.ram16_backing || s.texture_offload))
+    throw Error('Stage 7 requires RAM Safety and Extended Memory (RAM16) On, Texture Residency Probe Off.');
   // Keep the known-good emulator and chenxiao candidate intact. Adaptive mode is isolated.
   const experimentalHdDlss = s.upscaler === 'dlss' && s.output === '1080p';
-  const exe = s.ram_safety
+  const exe = s.stage7_ram
+    ? path.join(root,'_Build','windows-stage7-resource','kyty_emulator.exe')
+    : s.ram_safety
     ? path.join(root,'_Build','windows-ram-offload','kyty_emulator.exe')
     : experimentalHdDlss
       ? path.join(root,'_Build','windows-chenxiao','kyty_emulator.exe')
       : findEmulator(root);
-  if (!fs.existsSync(exe)) throw Error(s.ram_safety
+  if (!fs.existsSync(exe)) throw Error(s.stage7_ram
+    ? 'Stage 7 experiment emulator is missing (_Build/windows-stage7-resource/kyty_emulator.exe). Build isolated native candidate first.'
+    : s.ram_safety
     ? 'Stage 5 Offload emulator is missing (_Build/windows-ram-offload/kyty_emulator.exe). Build the isolated candidate first.'
     : experimentalHdDlss
       ? 'Experimental 1080p DLSS emulator is missing (_Build/windows-chenxiao/kyty_emulator.exe). Build the chenxiao candidate first.'
@@ -176,6 +184,7 @@ function buildPlayArgs(root, raw) {
   if (s.present_direct) vars.push('KYTY_PRESENT_DIRECT=1');
   if (s.antilag) vars.push('KYTY_ANTI_LAG=1');
   if (s.ram_diet) vars.push('KYTY_RAM_DIET=1');
+  if (s.stage7_ram) vars.push('KYTY_STAGE7_RAM=1','KYTY_TEXTURE_OFFLOAD=0','KYTY_TEXTURE_OFFLOAD_PROBE=0');
   if (s.ram16_backing) vars.push('KYTY_BACKING_FILE=1','KYTY_BACKING_ON_DEMAND=1');
   if (s.ram_safety) {
     // Guard only background shader work; on-demand gameplay shader compilation still runs.

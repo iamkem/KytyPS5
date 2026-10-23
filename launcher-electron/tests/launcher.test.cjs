@@ -55,6 +55,31 @@ test('Texture Residency Probe is separately opt-in and never enables destructive
   assert.doesNotMatch(legacy.args[legacy.args.indexOf('-Set')+1],/KYTY_TEXTURE_OFFLOAD=/);
   assert.equal(lib.applyPreset(rootBase,'Balanced').texture_offload,true);
 });
+test('Stage 7 residency mode is isolated and stays opt-in',{skip:!localReady},()=>{
+  const base=lib.loadSettings(root);
+  assert.equal(lib.clean({}).stage7_ram,false);
+  const candidate={...base,ram_safety:true,ram16_backing:true,texture_offload:false,stage7_ram:true};
+  const trial=lib.buildPlayArgs(root,candidate);
+  assert.match(trial.args[trial.args.indexOf('-Exe')+1],/windows-stage7-resource.*kyty_emulator\.exe$/i);
+  const env=trial.args[trial.args.indexOf('-Set')+1];
+  assert.match(env,/KYTY_STAGE7_RAM=1/);
+  assert.match(env,/KYTY_TEXTURE_OFFLOAD_PROBE=0/);
+  assert.match(env,/KYTY_BACKING_FILE=1/);
+  assert.match(env,/KYTY_ADAPTIVE_RAM=1/);
+  assert.doesNotMatch(env,/KYTY_TEXTURE_OFFLOAD=1/);
+  assert.throws(()=>lib.buildPlayArgs(root,{...candidate,ram_safety:false}),/Stage 7 requires/);
+  assert.throws(()=>lib.buildPlayArgs(root,{...candidate,ram16_backing:false}),/Stage 7 requires/);
+  assert.throws(()=>lib.buildPlayArgs(root,{...candidate,texture_offload:true}),/Stage 7 requires/);
+  const old=lib.buildPlayArgs(root,{...candidate,stage7_ram:false});
+  assert.doesNotMatch(old.args[old.args.indexOf('-Set')+1],/KYTY_STAGE7_RAM=/);
+  assert.match(old.args[old.args.indexOf('-Exe')+1],/windows-ram-offload.*kyty_emulator\.exe$/i);
+  assert.equal(lib.applyPreset(candidate,'Balanced').stage7_ram,true);
+  const probe=spawnSync(trial.command,[...trial.args,'-DryRun'],
+    {cwd:root,encoding:'utf8',windowsHide:true,timeout:40000});
+  assert.equal(probe.status,0,probe.stderr||probe.stdout);
+  assert.match(probe.stdout,/KYTY_STAGE7_RAM=1/);
+  assert.match(probe.stdout,/windows-stage7-resource/i);
+});
 test('Presets are actual graphics settings and preserve RAM16',()=>{
   const base={...lib.defaults,ram16_backing:true,ram_diet:true,lowlatency:true};
   for(const [name,p] of Object.entries(lib.presets)){
