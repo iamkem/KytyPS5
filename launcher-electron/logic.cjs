@@ -122,12 +122,12 @@ function buildPlayArgs(root, raw) {
   // Keep the known-good emulator and chenxiao candidate intact. Adaptive mode is isolated.
   const experimentalHdDlss = s.upscaler === 'dlss' && s.output === '1080p';
   const exe = s.ram_safety
-    ? path.join(root,'_Build','windows-ram-adaptive','kyty_emulator.exe')
+    ? path.join(root,'_Build','windows-ram-stutter-guard','kyty_emulator.exe')
     : experimentalHdDlss
       ? path.join(root,'_Build','windows-chenxiao','kyty_emulator.exe')
       : findEmulator(root);
   if (!fs.existsSync(exe)) throw Error(s.ram_safety
-    ? 'Adaptive RAM emulator is missing (_Build/windows-ram-adaptive/kyty_emulator.exe). Build the native RAM candidate first.'
+    ? 'RAM Stutter Guard emulator is missing (_Build/windows-ram-stutter-guard/kyty_emulator.exe). Build the Stutter Guard candidate first.'
     : experimentalHdDlss
       ? 'Experimental 1080p DLSS emulator is missing (_Build/windows-chenxiao/kyty_emulator.exe). Build the chenxiao candidate first.'
       : 'Emulator executable not found. Please build kyty_emulator first.');

@@ -11,9 +11,9 @@ test('RAM Safety Mode is opt-in and preserves the known-good defaults',{skip:!lo
   const baseline=lib.buildPlayArgs(root,{...original,ram_safety:false});
   assert.ok(!baseline.args.join(' ').includes('KYTY_PREFETCH_MIN_AVAIL_MB='));
   assert.equal(lib.clean({}).ram_safety,false);
-  const candidate=path.join(root,'_Build','windows-ram-adaptive','kyty_emulator.exe');
+  const candidate=path.join(root,'_Build','windows-ram-stutter-guard','kyty_emulator.exe');
   if (!fs.existsSync(candidate)) {
-    assert.throws(()=>lib.buildPlayArgs(root,{...original,ram_safety:true}),/Adaptive RAM emulator is missing/);
+    assert.throws(()=>lib.buildPlayArgs(root,{...original,ram_safety:true}),/RAM Stutter Guard emulator is missing/);
     return;
   }
   const safety=lib.buildPlayArgs(root,{...original,ram_safety:true});
@@ -22,7 +22,7 @@ test('RAM Safety Mode is opt-in and preserves the known-good defaults',{skip:!lo
   assert.match(vars,/KYTY_PREFETCH_MIN_AVAIL_MB=4096/);
   assert.match(vars,/KYTY_SHADER_PREFETCH_THREADS=1/);
   assert.match(vars,/KYTY_SHADER_FOLLOW_THREADS=1/);
-  assert.match(safety.args[safety.args.indexOf('-Exe')+1],/windows-ram-adaptive.*kyty_emulator\.exe$/i);
+  assert.match(safety.args[safety.args.indexOf('-Exe')+1],/windows-ram-stutter-guard.*kyty_emulator\.exe$/i);
   assert.notEqual(safety.args[safety.args.indexOf('-Exe')+1],baseline.args[baseline.args.indexOf('-Exe')+1]);
   assert.deepEqual(lib.applyPreset({...original,ram_safety:true},'Balanced').ram_safety,true);
   const probe=spawnSync(safety.command,[...safety.args,'-DryRun'],
@@ -60,7 +60,7 @@ test('Settings migrate from PowerShell JSON and round-trip without touching real
 test('Four resolution-based presets change the actual emulator command',{skip:!localReady},()=>{
   // Validate the graphics presets independently of the player's saved Frame Generation mode.
   // A real user can have framegen=2 (DLSS-G 2x); preset selection must not silently disable it.
-  const base=lib.clean({...lib.loadSettings(root),framegen:0});
+  const base=lib.clean({...lib.loadSettings(root),framegen:0,ram_safety:false});
   for(const [name,p] of Object.entries(lib.presets)){
     const s=lib.applyPreset(base,name);
     const cmd=lib.buildPlayArgs(root,s);
@@ -86,7 +86,7 @@ test('Four resolution-based presets change the actual emulator command',{skip:!l
   }
 });
 test('chenxiao07 1080p game output works with DLSS and preserves explicit 4K output',{skip:!localReady},()=>{
-  const base=lib.loadSettings(root);
+  const base={...lib.loadSettings(root),ram_safety:false};
   const hd=lib.clean({...base,upscaler:'dlss',output:'1080p',render_dlss:720,framegen:2});
   const args=lib.buildPlayArgs(root,hd).args;
   assert.equal(args[args.indexOf('-RenderHeight')+1],'720');
@@ -103,7 +103,7 @@ test('chenxiao07 1080p game output works with DLSS and preserves explicit 4K out
   assert.equal(lib.applyPreset({...base,framegen:2},'Ultra Performance').render_dlss,720);
 });
 test('DLSS-G 2x survives graphics preset and reaches PowerShell as -FrameGen 1',{skip:!localReady},()=>{
-  const cfg=lib.applyPreset({...lib.loadSettings(root),framegen:2},'Performance');
+  const cfg=lib.applyPreset({...lib.loadSettings(root),framegen:2,ram_safety:false},'Performance');
   const spec=lib.buildPlayArgs(root,cfg);
   assert.equal(spec.args[spec.args.indexOf('-FrameGen')+1],'1');
   assert.equal(spec.args[spec.args.indexOf('-Upscaler')+1],'dlss');
@@ -121,7 +121,7 @@ test('Missing emulator or missing game does not falsely report success',()=>{
   finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
 test('Real run-windows.ps1 accepts Electron Play settings in DryRun',{skip:!localReady},()=>{
-  const s=lib.applyPreset(lib.loadSettings(root),'Performance');
+  const s=lib.applyPreset({...lib.loadSettings(root),ram_safety:false},'Performance');
   const spec=lib.buildPlayArgs(root,s);
   const result=spawnSync(spec.command,[...spec.args,'-DryRun'],{cwd:root,encoding:'utf8',windowsHide:true,timeout:40000});
   assert.equal(result.status,0,result.stderr || result.error?.message || result.stdout);

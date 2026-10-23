@@ -2346,6 +2346,7 @@ vk::Pipeline BindPipelineHandle(const PipelineCache::Pipeline& pipeline) {
 	EXIT_IF(made.pipeline == nullptr || made.pipeline_layout != pipeline.pipeline_layout ||
 	        made.descriptor_set_layout != pipeline.descriptor_set_layout);
 	const_cast<PipelineCache::Pipeline&>(pipeline).pipeline = made.pipeline;
+	if (MemoryPressure::Enabled()) pipeline.last_remade_at = std::chrono::steady_clock::now();
 	const auto us = static_cast<uint64_t>(
 	    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
 	g_pipeline_evictions.remade.fetch_add(1, std::memory_order_relaxed);
@@ -2390,8 +2391,10 @@ void PipelineCache::EvictIdlePipelines() {
 	// Sample physical RAM only on the existing periodic pipeline sweep. 1 GiB hysteresis
 	// avoids alternating driver pipeline destruction/recreation near the threshold.
 	static MemoryPressure::Level adaptive_pressure = MemoryPressure::Level::Normal;
+	uint64_t available_ram = 0;
 	if (MemoryPressure::Enabled()) {
 		const auto available = LocalPlatform::AvailablePhysicalMemory();
+		available_ram = available;
 		const auto total     = LocalPlatform::PhysicalMemory();
 		const auto next      = MemoryPressure::Next(adaptive_pressure, available, total);
 		if (next != adaptive_pressure) {
@@ -2403,15 +2406,24 @@ void PipelineCache::EvictIdlePipelines() {
 		adaptive_pressure = next;
 	}
 	const bool ram_pressure = MemoryPressure::Enabled() && adaptive_pressure != MemoryPressure::Level::Normal;
-	const auto adaptive_policy = MemoryPressure::Pipelines(adaptive_pressure);
-	// Under pressure, only the idle horizon gets shorter. The existing remake
-	// eligibility, binding age and pending-optimized-build checks remain in place.
-	const auto idle_horizon = ram_pressure
-	    ? std::min(settings.idle, std::chrono::duration_cast<std::chrono::nanoseconds>(
-	                               std::chrono::seconds(adaptive_policy.idle_seconds)))
-	    : settings.idle;
-	const size_t max_evictions = ram_pressure ? adaptive_policy.max_evictions_per_scan : MaxEvictions;
-	const bool scene_left = !m_scene_swept && now - m_scene_since >= SceneSettle;
+	const bool emergency = MemoryPressure::Enabled() && available_ram > 0 && available_ram < MemoryPressure::GiB;
+	const auto adaptive_policy = MemoryPressure::Pipelines(adaptive_pressure, emergency);
+	// Stutter Guard: when Adaptive RAM is on, use a longer idle horizon and
+	// smaller eviction batches even in the normal tier. Guest memory and texture
+	// pressure policies remain unchanged. Respect longer user-configured horizons.
+	const auto idle_horizon = emergency
+	    ? std::chrono::duration_cast<std::chrono::nanoseconds>(
+	          std::chrono::seconds(adaptive_policy.idle_seconds))
+	    : MemoryPressure::Enabled()
+	      ? std::max(settings.idle, std::chrono::duration_cast<std::chrono::nanoseconds>(
+	                                   std::chrono::seconds(adaptive_policy.idle_seconds)))
+	      : settings.idle;
+	const size_t max_evictions = MemoryPressure::Enabled()
+	    ? adaptive_policy.max_evictions_per_scan : MaxEvictions;
+	// Scene-only sweeps after a 60s world transition caused a large rebuild wave
+	// when revisiting an area. Adaptive mode retires by measured idle age instead.
+	const bool scene_left = !MemoryPressure::Enabled() && !m_scene_swept &&
+	                        now - m_scene_since >= SceneSettle;
 	uint64_t video = 0, budget = 0;
 	const bool known = m_graphics.QueryLocalVideoMemory(&video, &budget);
 	m_evict_pressure = (known && (settings.always || video + EvictMargin >= budget)) || RamDietEnabled() || ram_pressure;
@@ -2452,6 +2464,9 @@ void PipelineCache::EvictIdlePipelines() {
 	const auto evict   = [&](Pipeline& pipeline) {
 		if (evicted == max_evictions || pipeline.pipeline == nullptr || pipeline.remake == nullptr || pipeline.unoptimized ||
 		    pipeline.optimized != nullptr)
+			return;
+		if (MemoryPressure::Enabled() && pipeline.last_remade_at != std::chrono::steady_clock::time_point {} &&
+		    now - pipeline.last_remade_at < std::chrono::seconds(adaptive_policy.remake_protection_seconds))
 			return;
 		const bool idle  = pipeline.last_flip < below;
 		const bool other = scene_left && pipeline.last_flip < m_scene_flip && !scene_recipes.contains(pipeline.recipe);

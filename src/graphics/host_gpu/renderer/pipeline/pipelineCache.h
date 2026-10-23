@@ -12,6 +12,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
@@ -203,6 +204,9 @@ public:
 		// Out of video memory while idle (EvictIdlePipelines): the flip of its last binding (BindPipelineHandle), and how
 		// to make it again (a pipeline the static store gave: made again from it; null: never evicted).
 		mutable uint32_t                                       last_flip = 0;
+		// Opt-in Adaptive RAM only: a pipeline that caused a synchronous remake
+		// is kept for a grace window, preventing repeated shader/pipeline stalls.
+		mutable std::chrono::steady_clock::time_point last_remade_at {};
 		std::shared_ptr<const std::function<void(Pipeline&)>> remake;
 		// Its warmup recipe (LocalShaderWarmup::RecipeKey; 0: none, a native variant), and the scene generation it was
 		// last bound in (local/scene-tags.h: noted once per scene).
