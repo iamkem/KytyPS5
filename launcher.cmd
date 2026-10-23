@@ -2,6 +2,10 @@
 setlocal
 rem Personal Demon's Souls PC launcher. Emulator backend scripts remain required.
 set "ROOT=%~dp0"
+if exist "%ROOT%_Build\demons-souls-launcher-v9\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe" (
+  start "" "%ROOT%_Build\demons-souls-launcher-v9\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe"
+  exit /b 0
+)
 if exist "%ROOT%_Build\demons-souls-launcher-v8\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe" (
   start "" "%ROOT%_Build\demons-souls-launcher-v8\DemonsSoulsLauncher-win32-x64\DemonsSoulsLauncher.exe"
   exit /b 0

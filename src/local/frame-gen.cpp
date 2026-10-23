@@ -2155,8 +2155,13 @@ bool Upscale(vk::CommandBuffer command, const UpscaleInputs& inputs, const vk::d
 		return false;
 	}
 	const sl::BaseStructure* evaluate_inputs[] {&viewport};
+	// Streamline can report a budget warning after successfully recording DLSS; keep the image.
 	if (const auto result = g_api.evaluate_feature(sl::kFeatureDLSS, *token, evaluate_inputs, 1, command_buffer);
-	    result != sl::Result::eOk) {
+	    result == sl::Result::eWarnOutOfVRAM) {
+		static std::atomic<bool> reported {false};
+		if (!reported.exchange(true, std::memory_order_relaxed))
+			std::printf("DLSS super resolution: video memory budget warning (DLSS still runs)\n");
+	} else if (result != sl::Result::eOk) {
 		static std::atomic<uint32_t> reports {0};
 		if (reports.fetch_add(1, std::memory_order_relaxed) < 8)
 			std::printf("DLSS super resolution: slEvaluateFeature failed (%s)\n", sl::getResultAsStr(result));

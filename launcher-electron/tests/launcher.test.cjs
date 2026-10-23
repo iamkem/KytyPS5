@@ -58,6 +58,23 @@ test('Four resolution-based presets change the actual emulator command',{skip:!l
     assert.ok(a.includes('-Follow'));
   }
 });
+test('chenxiao07 1080p game output works with DLSS and preserves explicit 4K output',{skip:!localReady},()=>{
+  const base=lib.loadSettings(root);
+  const hd=lib.clean({...base,upscaler:'dlss',output:'1080p',render_dlss:720,framegen:2});
+  const args=lib.buildPlayArgs(root,hd).args;
+  assert.equal(args[args.indexOf('-RenderHeight')+1],'720');
+  assert.equal(args[args.indexOf('-Upscaler')+1],'dlss');
+  assert.equal(args[args.indexOf('-FrameGen')+1],'1');
+  assert.ok(args.includes('-HdOutput'),'DLSS and HD output may be enabled together');
+  assert.match(args[args.indexOf('-Exe')+1],/windows-chenxiao.*kyty_emulator\.exe$/i,
+    'Experimental HD+DLSS must use the isolated emulator');
+  assert.equal(lib.clean({...hd,render_dlss:1440}).render_dlss,1080,'HD output clamps rendering to 1080');
+  assert.throws(()=>lib.buildPlayArgs(root,{...hd,ratio:'21:9'}),/16:9 only/);
+  const normal=lib.buildPlayArgs(root,{...base,upscaler:'dlss',output:'4k',render_dlss:1152});
+  assert.ok(!normal.args.includes('-HdOutput'),'1440p window retains 4K game output by default');
+  assert.equal(normal.args[normal.args.indexOf('-RenderHeight')+1],'1152');
+  assert.equal(lib.applyPreset({...base,framegen:2},'Ultra Performance').render_dlss,720);
+});
 test('DLSS-G 2x survives graphics preset and reaches PowerShell as -FrameGen 1',{skip:!localReady},()=>{
   const cfg=lib.applyPreset({...lib.loadSettings(root),framegen:2},'Performance');
   const spec=lib.buildPlayArgs(root,cfg);

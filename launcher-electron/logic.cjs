@@ -14,7 +14,7 @@ const defaults = Object.freeze({
 });
 // Actual internal render resolution at 16:9. Display resolution is independent.
 const presets = Object.freeze({
-  'Ultra Performance': Object.freeze({render_dlss:900,quality:'lowest',fsr:false,output:'4k',upscaler:'dlss'}),
+  'Ultra Performance': Object.freeze({render_dlss:720,quality:'lowest',fsr:false,output:'4k',upscaler:'dlss'}),
   Performance: Object.freeze({render_dlss:1080,quality:'lowest',fsr:false,output:'4k',upscaler:'dlss'}),
   Balanced: Object.freeze({render_dlss:1152,quality:'low',fsr:false,output:'4k',upscaler:'dlss'}),
   Quality: Object.freeze({render_dlss:1440,quality:'standard',fsr:false,output:'4k',upscaler:'dlss'})
@@ -38,8 +38,13 @@ function clean(candidate = {}) {
   if (!['4k','1080p'].includes(result.output)) result.output = '4k';
   if (!['1280x720','1920x1080','2560x1440','3840x2160','2560x1080','3440x1440','3840x1600','5120x2160','3840x1080','5120x1440','7680x2160'].includes(result.resolution)) result.resolution = '2560x1440';
   if (![0,4096,6144,8192,10240].includes(result.vram_budget_mb)) result.vram_budget_mb = 0;
-  if (result.render_dlss < 900 || result.render_dlss > 2160) result.render_dlss = 1152;
-  if (result.render < 900 || result.render > 2160) result.render = 1440;
+  if (result.render_dlss < 720 || result.render_dlss > 2160) result.render_dlss = 1152;
+  if (result.render < 720 || result.render > 2160) result.render = 1440;
+  // The HD game output cannot render above its own 1080-line output.
+  if (result.output === '1080p') {
+    result.render = Math.min(result.render, 1080);
+    result.render_dlss = Math.min(result.render_dlss, 1080);
+  }
   if (result.framegen > 6) result.framegen = 0;
   if (result.hud > 2) result.hud = 0;
   if (result.language > 29) result.language = 1;
@@ -114,8 +119,14 @@ function gameValid(settings) {
 }
 function buildPlayArgs(root, raw) {
   const s = clean(raw);
-  const exe = findEmulator(root);
-  if (!fs.existsSync(exe)) throw Error('Emulator executable not found. Please build kyty_emulator first.');
+  // Keep the known-good emulator for the normal 4K output; 1080p DLSS is experimental.
+  const experimentalHdDlss = s.upscaler === 'dlss' && s.output === '1080p';
+  const exe = experimentalHdDlss
+    ? path.join(root,'_Build','windows-chenxiao','kyty_emulator.exe')
+    : findEmulator(root);
+  if (!fs.existsSync(exe)) throw Error(experimentalHdDlss
+    ? 'Experimental 1080p DLSS emulator is missing (_Build/windows-chenxiao/kyty_emulator.exe). Build the chenxiao candidate first.'
+    : 'Emulator executable not found. Please build kyty_emulator first.');
   if (!gameValid(s)) throw Error('Game not found. Choose a folder containing eboot.bin and sce_sys.');
   const [width,height] = s.resolution.split('x');
   const args = ['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(root,'run-windows.ps1'),
@@ -136,7 +147,12 @@ function buildPlayArgs(root, raw) {
   if (s.fsr) args.push('-Fsr');
   if (!s.fsr && s.framegen >= 2) args.push('-FrameGen',String(s.framegen-1));
   if (upscale) args.push('-Upscaler','dlss');
-  if (!upscale && s.output === '1080p') args.push('-HdOutput');
+  // The upstream PS5 Pro path supports DLSS directly into the game's 1080p output.
+  // A 1080p game output is 16:9 only; 4K remains the default for existing settings.
+  if (s.output === '1080p') {
+    if (s.ratio !== '16:9') throw Error('Game Output 1080p supports 16:9 only. Choose 4K for ultrawide.');
+    args.push('-HdOutput');
+  }
   if ((upscale || (!s.fsr && s.framegen >= 2))) {
     const dir = findStreamline(s,root);
     if (!dir) throw Error('NVIDIA Streamline runtime not found.');

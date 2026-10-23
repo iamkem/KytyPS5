@@ -6,7 +6,7 @@
 
 namespace Loader {
 struct Program;
-// KYTY_RENDER_HEIGHT=<720..2160> (run-windows.ps1 -RenderHeight, the launcher's "Render resolution"): Demon's Souls'
+// KYTY_RENDER_HEIGHT=<360..2160> (run-windows.ps1 -RenderHeight, the launcher's "Render resolution"): Demon's Souls'
 // performance mode - the PS5's default, its 3D rendered at 2560x1440 and upscaled by the game to a 3840x2160 output -
 // renders its 3D at that height (16:9) instead. The output, the UI and what the game draws at output size stay 4K;
 // GPU-bound PCs (a laptop's RTX 3080: 1-1 standing 20.7 -> 24.5 fps at 1080) trade sharpness for frame rate, and 2160
@@ -15,7 +15,8 @@ struct Program;
 // the 4K layout (off screen); KYTY_HD_OUTPUT (loader/demonsSoulsHdOutput.h) runs them whole, the height then sizing
 // their 3D (at most 1080; the aspect as here, squeezed into the 1920x1080 output). With the game's super resolution path on (KYTY_UPSCALER,
 // loader/demonsSoulsSuperResolution.h) the performance mode is display mode 5: the height sizes its 3D instead
-// (unset: the PS5 Pro's 2688x1512; at least 1080), the upscaler making the 3840x2160 image from it.
+// (unset: the PS5 Pro's 2688x1512; 1080 and up, or 720 for DLSS's ultra performance), the upscaler making the
+// 3840x2160 image from it.
 // KYTY_RENDER_ASPECT=<w>:<h> (run-windows.ps1 -Aspect, the launcher's "Aspect ratio"; 21:9 is taken as 64:27): the 3D
 // rendered wider than 16:9, up to 32:9, at the render height - 3416x1440 for 21:9 - and its projection's aspect (the
 // render setup's 16:9, AspectStore) to match: more of the world to the sides, not a stretched 16:9 view. The game's
@@ -71,6 +72,8 @@ inline constexpr std::string_view SetterFixedPair      = "c5 f8 28 c8 48 b9 00 0
 inline constexpr std::string_view ConstructorFixedPair = "4c 8b 35 ?? ?? ?? ?? 48 b9 00 0f 00 00 70 08 00 00";
 inline constexpr std::string_view QueryFixedPair       = "89 7e 04 48 ba 00 0f 00 00 70 08 00 00 48 bf";
 inline constexpr uint32_t         OutputWidths[5] {1920, 1920, 3840, 3840, 3840};
+// ... and heights, right after the widths (the HD output with the PS5 Pro path makes mode 5's 1080).
+inline constexpr uint32_t         OutputHeights[5] {1080, 1080, 2160, 2160, 2160};
 // The render size query's per-mode tables (modes 1-5): widths, heights.
 inline constexpr uint32_t ModeWidths[5] {1600, 1920, 2560, 3840, 2688};
 inline constexpr uint32_t ModeHeights[5] {900, 1080, 1440, 2160, 1512};
@@ -84,13 +87,16 @@ inline constexpr std::string_view AspectStore = "c7 43 04 39 8e e3 3f";
 inline constexpr double           GameAspect  = 16.0 / 9.0;
 inline constexpr double           WidestAspect = 32.0 / 9.0;
 
+// The least render height: 360, a third of the 1080p output (DLSS's ultra performance there; issue #129).
+inline constexpr uint32_t LeastRenderHeight = 360;
+
 // The render size for a height and an aspect, its width a multiple of 8; {0, 0} for a height out of range.
 struct Size {
 	uint32_t width  = 0;
 	uint32_t height = 0;
 };
 inline Size RenderSizeFor(uint32_t height, double aspect = GameAspect) {
-	if (height < 720 || height > OutputHeight) return {};
+	if (height < LeastRenderHeight || height > OutputHeight) return {};
 	const auto width = static_cast<uint32_t>(std::lround(height * aspect / 8.0)) * 8u;
 	return {width, height};
 }

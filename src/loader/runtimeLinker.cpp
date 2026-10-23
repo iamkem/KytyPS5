@@ -1620,8 +1620,9 @@ void RuntimeLinker::Execute(const std::filesystem::path& game_patch) {
 	DemonsSoulsIdle::Install(m_programs.empty() ? nullptr : m_programs.front());
 	for (auto* program : m_programs) DemonsSoulsCopy::Install(program);
 	DemonsSoulsGpuPages::Install(m_programs.empty() ? nullptr : m_programs.front());
-	DemonsSoulsHdOutput::Install(m_programs.empty() ? nullptr : m_programs.front());
+	// Install the PS5 Pro path first so HD Output can keep its 1080p interface with DLSS.
 	DemonsSoulsSuperResolution::Install(m_programs.empty() ? nullptr : m_programs.front());
+	DemonsSoulsHdOutput::Install(m_programs.empty() ? nullptr : m_programs.front());
 	DemonsSoulsRenderSize::Install(m_programs.empty() ? nullptr : m_programs.front());
 	DemonsSoulsSceneGuard::Install(m_programs.empty() ? nullptr : m_programs.front());
 	DemonsSoulsTouchGuard::Install(m_programs.empty() ? nullptr : m_programs.front());

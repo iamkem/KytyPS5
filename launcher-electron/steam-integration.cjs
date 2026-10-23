@@ -10,7 +10,7 @@ function isSteamGameMode(argv=[]){
  return Array.isArray(argv)&&argv.includes(STEAM_GAME_ARG)&&!argv.includes('--smoke-ui');
 }
 function steamShortcut(root,exists=fs.existsSync){
- const launchers=['v8','v7','v6'].map(version=>path.join(root,'_Build',
+ const launchers=['v9','v8','v7','v6'].map(version=>path.join(root,'_Build',
    'demons-souls-launcher-'+version,'DemonsSoulsLauncher-win32-x64','DemonsSoulsLauncher.exe'));
  const target=launchers.find(exists);
  return {

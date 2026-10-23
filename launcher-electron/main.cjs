@@ -590,7 +590,7 @@ app.whenReady().then(()=>{
         const applied=currentSettings();
         const wanted=logic.applyPreset(original,requested);
         if (applied.render_dlss!==wanted.render_dlss || applied.quality!==wanted.quality ||
-            applied.framegen!==0 || applied.ram16_backing!==original.ram16_backing)
+            applied.framegen!==original.framegen || applied.ram16_backing!==original.ram16_backing)
           throw Error('Preset did not persist actual configuration: '+JSON.stringify(applied));
         console.log('ELECTRON_PRESET_APPLIED_PASS '+requested+' '+applied.render_dlss+'p '+applied.quality);
         await optionsWindow.webContents.executeJavaScript("document.querySelector('#cancel').click()");

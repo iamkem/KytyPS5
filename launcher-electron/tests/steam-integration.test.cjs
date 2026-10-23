@@ -11,21 +11,25 @@ test('Steam integration is opt-in and never starts gameplay in UI smoke mode',()
  assert.equal(isSteamGameMode(['launcher.exe',STEAM_GAME_ARG,'--smoke-ui']),false);
  assert.equal(isSteamGameMode(['launcher.exe','--steam-game-extra']),false);
 });
-test('Steam shortcut picks packaged launcher v8 without editing Steam or user settings',()=>{
+test('Steam shortcut prefers packaged launcher v9 and falls back to v8',()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'kyty-steam-'));
  try{
   const v8=path.join(dir,'_Build','demons-souls-launcher-v8',
     'DemonsSoulsLauncher-win32-x64','DemonsSoulsLauncher.exe');
   const v7=v8.replaceAll('launcher-v8','launcher-v7');
+  const v9=v8.replaceAll('launcher-v8','launcher-v9');
   fs.mkdirSync(path.dirname(v8),{recursive:true});fs.writeFileSync(v8,'dummy');
   fs.mkdirSync(path.dirname(v7),{recursive:true});fs.writeFileSync(v7,'dummy');
+  fs.mkdirSync(path.dirname(v9),{recursive:true});fs.writeFileSync(v9,'dummy');
   const expected=steamShortcut(dir);
   assert.equal(expected.available,true);
-  assert.equal(expected.target,v8);
-  assert.equal(expected.startIn,path.dirname(v8));
+  assert.equal(expected.target,v9);
+  assert.equal(expected.startIn,path.dirname(v9));
   assert.equal(expected.launchOptions,'--steam-game');
   assert.equal(expected.name,STEAM_GAME_NAME);
   assert.match(expected.limitation,/Non-Steam Game/);
+  fs.rmSync(v9);
+  assert.equal(steamShortcut(dir).target,v8);
   fs.rmSync(v8);
   assert.equal(steamShortcut(dir).target,v7);
  }finally{fs.rmSync(dir,{recursive:true,force:true});}

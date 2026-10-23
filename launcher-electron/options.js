@@ -2,7 +2,7 @@
 let state,runtime,syncing=false,cacheItems=[],inputItems=[];
 const $=id=>document.getElementById(id);
 const presets={
- 'Ultra Performance':{render_dlss:900,quality:'lowest',fsr:false,output:'4k',upscaler:'dlss'},
+ 'Ultra Performance':{render_dlss:720,quality:'lowest',fsr:false,output:'4k',upscaler:'dlss'},
  Performance:{render_dlss:1080,quality:'lowest',fsr:false,output:'4k',upscaler:'dlss'},
  Balanced:{render_dlss:1152,quality:'low',fsr:false,output:'4k',upscaler:'dlss'},
  Quality:{render_dlss:1440,quality:'standard',fsr:false,output:'4k',upscaler:'dlss'}
@@ -33,11 +33,12 @@ function fill(){
   for(const [id,key] of Object.entries(numberKeys))set(id,s[key]);
   for(const [id,key] of Object.entries(plainKeys))set(id,s[key]);
   set('hdr',s.hdr);set('cheats',s.cheats);
+  for(const option of $('render-height').options)option.disabled=s.output==='1080p'&&Number(option.value)>1080;
   set('render-height',s.upscaler==='dlss'?s.render_dlss:s.render);
   set('game-path',s.game);set('sdk-path',s.streamline);
   set('preset',activePreset(s));
   $('preset-summary').textContent=activePreset(s)+' · '+(s.upscaler==='dlss'?'DLSS':'Game TAA')+' '+(s.upscaler==='dlss'?s.render_dlss:s.render)+'p · '+(s.quality==='standard'?'Standard (PS5)':s.quality);
-  $('output').disabled=s.upscaler==='dlss';
+  $('output').disabled=false; // chenxiao07: optional native 1080p game output supports DLSS too.
  }finally{syncing=false;}
 }
 function update(id){
@@ -51,6 +52,14 @@ function update(id){
  else if(id==='hdr')state.hdr=$('hdr').checked;
  else if(id==='cheats')state.cheats=$('cheats').checked;
  if(id==='ratio'&&!sizes[val].includes(state.resolution))state.resolution=sizes[val][0];
+ if(id==='ratio'&&val!=='16:9'&&state.output==='1080p')state.output='4k';
+ if(id==='output'&&val==='1080p'&&state.ratio!=='16:9'){
+  state.output='4k';showMessage('Game Output 1080p supports 16:9 only; keeping 4K for ultrawide.');
+ }
+ if(state.output==='1080p'){
+  state.render=Math.min(state.render,1080);
+  state.render_dlss=Math.min(state.render_dlss,1080);
+ }
  fill();
 }
 for(const id of [...Object.keys(boolKeys),...Object.keys(numberKeys),...Object.keys(plainKeys),'render-height','window-mode','hdr','cheats']){
