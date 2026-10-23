@@ -9,7 +9,7 @@ const defaults = Object.freeze({
   ratio: '16:9', quality: 'standard', vsync: false, hdr: false, framegen: 0,
   hud: 1, streamline: '', safegpu: false, upscaler: 'dlss', render_dlss: 1152,
   fsr: false, output: '4k', lowlatency: true, present_direct: false, antilag: false,
-  ram_diet: true, ram16_backing: true, ram_safety: false, vram_budget_mb: 0,
+  ram_diet: true, ram16_backing: true, ram_safety: false, texture_offload: false, vram_budget_mb: 0,
   discord_presence: false, discord_app_id: '', discord_large_image: ''
 });
 // Actual internal render resolution at 16:9. Display resolution is independent.
@@ -19,7 +19,7 @@ const presets = Object.freeze({
   Balanced: Object.freeze({render_dlss:1152,quality:'low',fsr:false,output:'4k',upscaler:'dlss'}),
   Quality: Object.freeze({render_dlss:1440,quality:'standard',fsr:false,output:'4k',upscaler:'dlss'})
 });
-const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing','ram_safety','discord_presence'];
+const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing','ram_safety','texture_offload','discord_presence'];
 const numericKeys = ['language','render','render_dlss','framegen','hud','vram_budget_mb'];
 function clean(candidate = {}) {
   if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) throw Error('Invalid settings object');
@@ -122,12 +122,12 @@ function buildPlayArgs(root, raw) {
   // Keep the known-good emulator and chenxiao candidate intact. Adaptive mode is isolated.
   const experimentalHdDlss = s.upscaler === 'dlss' && s.output === '1080p';
   const exe = s.ram_safety
-    ? path.join(root,'_Build','windows-ram-stutter-guard','kyty_emulator.exe')
+    ? path.join(root,'_Build','windows-ram-offload','kyty_emulator.exe')
     : experimentalHdDlss
       ? path.join(root,'_Build','windows-chenxiao','kyty_emulator.exe')
       : findEmulator(root);
   if (!fs.existsSync(exe)) throw Error(s.ram_safety
-    ? 'RAM Stutter Guard emulator is missing (_Build/windows-ram-stutter-guard/kyty_emulator.exe). Build the Stutter Guard candidate first.'
+    ? 'Stage 5 Offload emulator is missing (_Build/windows-ram-offload/kyty_emulator.exe). Build the isolated candidate first.'
     : experimentalHdDlss
       ? 'Experimental 1080p DLSS emulator is missing (_Build/windows-chenxiao/kyty_emulator.exe). Build the chenxiao candidate first.'
       : 'Emulator executable not found. Please build kyty_emulator first.');
@@ -182,6 +182,12 @@ function buildPlayArgs(root, raw) {
     // The native prefetch worker already observes available physical RAM at each group boundary.
     vars.push('KYTY_ADAPTIVE_RAM=1','KYTY_PREFETCH_MIN_AVAIL_MB=4096',
       'KYTY_SHADER_PREFETCH_THREADS=1','KYTY_SHADER_FOLLOW_THREADS=1');
+  }
+  if (s.ram_safety && s.texture_offload) {
+    // High-risk opt-in: GPU-verified texture bytes may be discarded from guest RAM.
+    // Do not enable without RAM16/file backing; OffloadScan begins only under 1/3 RAM free.
+    if (!s.ram16_backing) throw Error('Experimental Texture Offload requires Extended Memory Mode (RAM16) On.');
+    vars.push('KYTY_TEXTURE_OFFLOAD=1','KYTY_TEXTURE_OFFLOAD_ADAPTIVE=1','KYTY_TEXTURE_OFFLOAD_CHECK_MB=8');
   }
   if (s.vram_budget_mb) vars.push('KYTY_VRAM_BUDGET_MB='+s.vram_budget_mb);
   if (vars.length) args.push('-Set',vars.join(','));

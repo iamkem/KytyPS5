@@ -76,6 +76,17 @@ struct PipelinePolicy {
     }
 }
 
+// Experimental duplicate-texture reclamation: begin checking verified GPU-only
+// texture copies before physical RAM is exhausted, with 2 GiB hysteresis.
+// No texture page is discarded by this policy; existing OffloadScan performs
+// GPU-download byte-for-byte validation and retains the restore/watch guards.
+[[nodiscard]] constexpr bool TextureOffloadScan(bool previous, uint64_t available, uint64_t total) {
+    if (available == 0 || total == 0) return false; // unknown: do not discard
+    const uint64_t start = std::clamp(total / 3, 4 * GiB, 10 * GiB);
+    const uint64_t stop = std::min(total, start + 2 * GiB);
+    return available < start || (previous && available < stop);
+}
+
 // Temporary-file caching is intentionally preferred for normal launches.
 // Adaptive launches allow Windows to write cold mapped guest pages to disk,
 // rather than hinting that a large temporary file should remain cached.

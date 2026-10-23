@@ -11,9 +11,9 @@ test('RAM Safety Mode is opt-in and preserves the known-good defaults',{skip:!lo
   const baseline=lib.buildPlayArgs(root,{...original,ram_safety:false});
   assert.ok(!baseline.args.join(' ').includes('KYTY_PREFETCH_MIN_AVAIL_MB='));
   assert.equal(lib.clean({}).ram_safety,false);
-  const candidate=path.join(root,'_Build','windows-ram-stutter-guard','kyty_emulator.exe');
+  const candidate=path.join(root,'_Build','windows-ram-offload','kyty_emulator.exe');
   if (!fs.existsSync(candidate)) {
-    assert.throws(()=>lib.buildPlayArgs(root,{...original,ram_safety:true}),/RAM Stutter Guard emulator is missing/);
+    assert.throws(()=>lib.buildPlayArgs(root,{...original,ram_safety:true}),/Stage 5 Offload emulator is missing/);
     return;
   }
   const safety=lib.buildPlayArgs(root,{...original,ram_safety:true});
@@ -22,7 +22,7 @@ test('RAM Safety Mode is opt-in and preserves the known-good defaults',{skip:!lo
   assert.match(vars,/KYTY_PREFETCH_MIN_AVAIL_MB=4096/);
   assert.match(vars,/KYTY_SHADER_PREFETCH_THREADS=1/);
   assert.match(vars,/KYTY_SHADER_FOLLOW_THREADS=1/);
-  assert.match(safety.args[safety.args.indexOf('-Exe')+1],/windows-ram-stutter-guard.*kyty_emulator\.exe$/i);
+  assert.match(safety.args[safety.args.indexOf('-Exe')+1],/windows-ram-offload.*kyty_emulator\.exe$/i);
   assert.notEqual(safety.args[safety.args.indexOf('-Exe')+1],baseline.args[baseline.args.indexOf('-Exe')+1]);
   assert.deepEqual(lib.applyPreset({...original,ram_safety:true},'Balanced').ram_safety,true);
   const probe=spawnSync(safety.command,[...safety.args,'-DryRun'],
@@ -32,6 +32,27 @@ test('RAM Safety Mode is opt-in and preserves the known-good defaults',{skip:!lo
   assert.match(probe.stdout,/KYTY_PREFETCH_MIN_AVAIL_MB=4096/);
   assert.match(probe.stdout,/KYTY_SHADER_PREFETCH_THREADS=1/);
   assert.match(probe.stdout,/KYTY_SHADER_FOLLOW_THREADS=1/);
+});
+test('Experimental Texture Offload is separately opt-in, gated by RAM Safety and RAM16',{skip:!localReady},()=>{
+  assert.equal(lib.clean({}).texture_offload,false);
+  const prior=lib.loadSettings(root);
+  const rootBase={...prior,ram_safety:true,ram16_backing:true,texture_offload:true};
+  const native=path.join(root,'_Build','windows-ram-offload','kyty_emulator.exe');
+  if(!fs.existsSync(native)){
+    assert.throws(()=>lib.buildPlayArgs(root,rootBase),/Stage 5 Offload emulator is missing/);
+    return;
+  }
+  const active=lib.buildPlayArgs(root,rootBase);
+  const vars=active.args[active.args.indexOf('-Set')+1];
+  assert.match(vars,/KYTY_TEXTURE_OFFLOAD=1/);
+  assert.match(vars,/KYTY_TEXTURE_OFFLOAD_ADAPTIVE=1/);
+  assert.match(vars,/KYTY_TEXTURE_OFFLOAD_CHECK_MB=8/);
+  assert.throws(()=>lib.buildPlayArgs(root,{...rootBase,ram16_backing:false}),/requires Extended Memory Mode/);
+  const disabled=lib.buildPlayArgs(root,{...rootBase,texture_offload:false});
+  assert.doesNotMatch(disabled.args[disabled.args.indexOf('-Set')+1],/KYTY_TEXTURE_OFFLOAD=/);
+  const legacy=lib.buildPlayArgs(root,{...rootBase,ram_safety:false});
+  assert.doesNotMatch(legacy.args[legacy.args.indexOf('-Set')+1],/KYTY_TEXTURE_OFFLOAD=/);
+  assert.equal(lib.applyPreset(rootBase,'Balanced').texture_offload,true);
 });
 test('Presets are actual graphics settings and preserve RAM16',()=>{
   const base={...lib.defaults,ram16_backing:true,ram_diet:true,lowlatency:true};

@@ -4013,6 +4013,28 @@ void TextureCache::OffloadScan(uint64_t tick) {
 		m_scheduler.Flush();
 	}
 	if (tick % 120 != 0) return;
+	// Stage 5 (opt-in): the Windows exception/restore hooks are set up at startup,
+	// but no NEW texture bytes are discarded while physical RAM remains ample.
+	// Continue draining/restoring all already-offloaded textures on every flip.
+	static const bool adaptive_offload = [] {
+		const char* flag = std::getenv("KYTY_TEXTURE_OFFLOAD_ADAPTIVE");
+		return flag != nullptr && std::string_view(flag) == "1";
+	}();
+	if (offload && adaptive_offload) {
+		static bool was_active = false; // GPU render thread owns OffloadScan
+		const uint64_t available = LocalPlatform::AvailablePhysicalMemory();
+		const uint64_t total = LocalPlatform::PhysicalMemory();
+		const bool active = MemoryPressure::TextureOffloadScan(was_active, available, total);
+		if (active != was_active) {
+			std::printf("Texture offload: adaptive scan %s; available %llu MiB of %llu MiB\n",
+			            active ? "started" : "paused",
+			            static_cast<unsigned long long>(available >> 20u),
+			            static_cast<unsigned long long>(total >> 20u));
+			std::fflush(stdout);
+		}
+		was_active = active;
+		if (!active) return;
+	}
 	// (Diagnostics: where a scan's time goes, printed when it took 10 ms or more.)
 	using Clock          = std::chrono::steady_clock;
 	const auto scan_start = Clock::now();

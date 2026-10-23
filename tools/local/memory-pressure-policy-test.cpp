@@ -31,6 +31,12 @@ static_assert(MemoryPressure::Pipelines(Level::Critical).remake_protection_secon
 static_assert(MemoryPressure::Pipelines(Level::Critical, true).idle_seconds == 90);
 static_assert(MemoryPressure::Pipelines(Level::Critical, true).max_evictions_per_scan == 128);
 static_assert(MemoryPressure::Pipelines(Level::Critical, true).remake_protection_seconds == 0);
+static_assert(!MemoryPressure::TextureOffloadScan(false, 12 * GiB, 24 * GiB));
+static_assert(MemoryPressure::TextureOffloadScan(false, 7 * GiB, 24 * GiB));
+static_assert(MemoryPressure::TextureOffloadScan(true, 9 * GiB, 24 * GiB));
+static_assert(!MemoryPressure::TextureOffloadScan(true, 11 * GiB, 24 * GiB));
+static_assert(!MemoryPressure::TextureOffloadScan(false, 0, 24 * GiB));
+static_assert(!MemoryPressure::TextureOffloadScan(true, 0, 24 * GiB));
 static_assert(MemoryPressure::PreferTemporaryBacking(false));
 static_assert(!MemoryPressure::PreferTemporaryBacking(true));
 
