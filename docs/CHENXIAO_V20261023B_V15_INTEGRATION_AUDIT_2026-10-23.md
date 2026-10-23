@@ -47,10 +47,10 @@ Upstream brought 52 commits since the merge base, with ~146 changed files. A dir
 
 ## Verification in this turn (no game launch)
 
-- Windows native Release `kyty_emulator.exe` **COMPILE+LINK PASS**, built in `_Build/windows-chenxiao-v15`; most recent build correctly compiled against private Streamline SDK headers.
-- Windows native Release `kyty_shader_precompile.exe` **COMPILE+LINK PASS** after repairing static source, linking Opus/FSR3, adding compatibility method and pointing CMake at Streamline SDK.
-- Electron Node unit/integration tests **51/51 PASS**, including real `run-windows.ps1 -DryRun` and isolated feature selection; **re-run after final shader-tool dispatch edit**.
-- Electron launcher packaged at `_Build/demons-souls-launcher-v15/DemonsSoulsLauncher-win32-x64/DemonsSoulsLauncher.exe`; GUI `--smoke-ui` exit 0 (re-run after final packaging).
+- Windows native Release `kyty_emulator.exe` **COMPILE+LINK PASS**, built in `_Build/windows-chenxiao-v15`; post-merge-commit incremental rebuild completed and linked, against the verified private Streamline SDK headers.
+- Windows native Release `kyty_shader_precompile.exe` **COMPILE+LINK PASS** after repairing static source, linking Opus/FSR3, adding compatibility method and pointing CMake at Streamline SDK; post-merge-commit incremental rebuild also linked.
+- Electron Node unit/integration tests **51/51 PASS** in the final run after correcting v15 shader-tool dispatch, including `run-windows.ps1 -DryRun`, optional FSR3/30FPS/GPU checks, incremental shader-update executable selection, mod manager, Discord, cache safety and Steam integration.
+- Electron launcher packaged at `_Build/demons-souls-launcher-v15/DemonsSoulsLauncher-win32-x64/DemonsSoulsLauncher.exe`; final packaged GUI `--smoke-ui` **PASS (exit 0)**; did not start emulator or gameplay.
 - No regular gameplay, forced RAM pressure, cache rebuilding or BSOD reproduction was attempted.
 - Compilation warnings remain from earlier source code (return type, MSVC deprecations); no known compile/link blockers remain.
 
