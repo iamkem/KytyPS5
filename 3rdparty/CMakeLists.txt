@@ -54,6 +54,18 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(zstd zarchive_source)
 
+# Opus: the DualSense's Bluetooth link carries the pad speaker as Opus packets inside HID reports (there is no
+# USB audio endpoint over Bluetooth), so src/libs/dualSenseBluetooth.cpp encodes them with this.
+set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+	opus
+	GIT_REPOSITORY https://github.com/xiph/opus.git
+	GIT_TAG ddbe48383984d56acd9e1ab6a090c54ca6b735a6 # v1.5.2
+	GIT_SHALLOW FALSE
+)
+FetchContent_MakeAvailable(opus)
+
 add_library(zarchive STATIC
 	"${zarchive_source_SOURCE_DIR}/src/zarchivereader.cpp"
 	"${zarchive_source_SOURCE_DIR}/src/zarchivewriter.cpp"
@@ -120,8 +132,8 @@ add_library(spirv-tools-opt ALIAS SPIRV-Tools-opt)
 
 add_subdirectory(xxHash/build/cmake)
 
-# AMD FidelityFX SDK 1.1.4 sources (FSR 3 upscaling and frame interpolation) for Linux builds.
-if (LINUX)
+# AMD FidelityFX SDK 1.1.4 sources (FSR 3 upscaling, and frame interpolation on Linux) for Linux and Windows builds.
+if (LINUX OR WIN32)
 	add_subdirectory(fidelityfx)
 endif()
 

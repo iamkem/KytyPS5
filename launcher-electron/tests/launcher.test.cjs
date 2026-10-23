@@ -4,7 +4,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const {spawnSync}=require('node:child_process');
 const lib=require('../logic.cjs');
-const root=path.resolve(__dirname,'..','..');
+const root=process.env.KYTY_TEST_ROOT || path.resolve(__dirname,'..','..');
 const localReady=fs.existsSync(lib.findEmulator(root)) && lib.gameValid(lib.loadSettings(root));
 test('RAM Safety Mode is opt-in and preserves the known-good defaults',{skip:!localReady},()=>{
   const original=lib.loadSettings(root);
@@ -105,6 +105,50 @@ test('Stage 7 residency mode is isolated and stays opt-in',{skip:!localReady},()
   assert.equal(probe.status,0,probe.stderr||probe.stdout);
   assert.match(probe.stdout,/KYTY_STAGE7_RAM=1/);
   assert.match(probe.stdout,/windows-stage7-resource/i);
+});
+test('Chenxiao v20261023b isolated runtime exposes safe FSR3, DLSS model and 30 FPS',{skip:!localReady},()=>{
+  const base={...lib.loadSettings(root),upstream_latest:true,chenxiao_guard:false,ram_safety:true,ram16_backing:true,
+    stage7_ram:false,texture_offload:false,fps120:false,fps30:false,fsr:false,framegen:0,dlss_model:'auto'};
+  assert.equal(lib.clean({}).upstream_latest,false);
+  assert.throws(()=>lib.buildPlayArgs(root,{...base,stage7_ram:true}),/Chenxiao v20261023b requires/);
+  assert.throws(()=>lib.buildPlayArgs(root,{...base,texture_offload:true}),/Chenxiao v20261023b requires/);
+  assert.throws(()=>lib.buildPlayArgs(root,{...base,ram16_backing:false}),/Chenxiao v20261023b requires/);
+  assert.throws(()=>lib.buildPlayArgs(root,{...base,ram_safety:false}),/Chenxiao v20261023b requires/);
+  assert.throws(()=>lib.buildPlayArgs(root,{...base,fps30:true,fps120:true}),/not both/);
+  assert.throws(()=>lib.buildPlayArgs(root,{...base,upstream_latest:false,upscaler:'fsr'}),/require Chenxiao v20261023b/);
+  const native=path.join(root,'_Build','windows-chenxiao-v15','kyty_emulator.exe');
+  if(!fs.existsSync(native)){
+    assert.throws(()=>lib.buildPlayArgs(root,base),/v20261023b native is missing/);
+    return;
+  }
+  const fsrSettings={...base,upscaler:'fsr',output:'1080p',render_dlss:540,fps30:true};
+  const fsr=lib.buildPlayArgs(root,fsrSettings);
+  const env=fsr.args[fsr.args.indexOf('-Set')+1];
+  assert.equal(fsr.args[fsr.args.indexOf('-RenderHeight')+1],'540');
+  assert.ok(fsr.args.includes('-HdOutput'));
+  assert.match(fsr.args[fsr.args.indexOf('-Exe')+1],/windows-chenxiao-v15.*kyty_emulator\.exe$/i);
+  assert.match(env,/KYTY_UPSCALER=fsr/);
+  assert.equal(lib.clean({...base,gpu:'NVIDIA RTX 5070;invalid'}).gpu,'');
+  const gpu=lib.buildPlayArgs(root,{...fsrSettings,gpu:'RTX 5070'});
+  assert.match(gpu.args[gpu.args.indexOf('-Set')+1],/KYTY_GPU=RTX 5070/);
+  assert.match(env,/KYTY_FLIP_RATE=1/);
+  assert.match(env,/KYTY_READ_GUARD=1/);
+  assert.match(env,/KYTY_TEXTURE_OFFLOAD=0/);
+  assert.ok(!fsr.args.includes('-StreamlineDir'));
+  assert.ok(!fsr.args.includes('-Upscaler'));
+  assert.equal(lib.clean({...base,upscaler:'fsr',output:'1080p',render_dlss:360}).render_dlss,360);
+  const dlss=lib.buildPlayArgs(root,{...base,upscaler:'dlss',output:'4k',dlss_model:'K'});
+  assert.match(dlss.args[dlss.args.indexOf('-Set')+1],/KYTY_DLSS_PRESET=K/);
+  assert.equal(lib.applyPreset(base,'Balanced').upstream_latest,true);
+  const pre=lib.buildPrecompileArgs(root,base);
+  assert.match(pre.args[pre.args.indexOf('-Exe')+1],/windows-chenxiao-v15.*kyty_shader_precompile\.exe$/i);
+  assert.ok(pre.args.includes('-Incremental'));
+  // Merely planning precompile is safe; this test does NOT execute it.
+  const dry=spawnSync(fsr.command,[...fsr.args,'-DryRun'],
+    {cwd:root,encoding:'utf8',windowsHide:true,timeout:45000});
+  assert.equal(dry.status,0,dry.stderr||dry.stdout);
+  assert.match(dry.stdout,/KYTY_UPSCALER=fsr/);
+  assert.match(dry.stdout,/KYTY_READ_GUARD=1/);
 });
 test('Presets are actual graphics settings and preserve RAM16',()=>{
   const base={...lib.defaults,ram16_backing:true,ram_diet:true,lowlatency:true};

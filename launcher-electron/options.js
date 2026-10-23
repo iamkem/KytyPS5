@@ -12,9 +12,9 @@ const sizes={'16:9':['1280x720','1920x1080','2560x1440','3840x2160'],
  '21:9':['2560x1080','3440x1440','3840x1600','5120x2160'],
  '32:9':['3840x1080','5120x1440','7680x2160']};
 const boolKeys={'vsync':'vsync','fps120':'fps120','lowlatency':'lowlatency',
- 'fsr':'fsr','ram-diet':'ram_diet','ram16':'ram16_backing','ram-safety':'ram_safety','texture-offload':'texture_offload','stage7-ram':'stage7_ram','chenxiao-guard':'chenxiao_guard','redzone':'redzone','safegpu':'safegpu'};
+ 'fsr':'fsr','fps30':'fps30','upstream-latest':'upstream_latest','ram-diet':'ram_diet','ram16':'ram16_backing','ram-safety':'ram_safety','texture-offload':'texture_offload','stage7-ram':'stage7_ram','chenxiao-guard':'chenxiao_guard','redzone':'redzone','safegpu':'safegpu'};
 const numberKeys={'framegen':'framegen','hud':'hud','vram':'vram_budget_mb','language':'language'};
-const plainKeys={'ratio':'ratio','resolution':'resolution','upscaler':'upscaler','output':'output','quality':'quality'};
+const plainKeys={'ratio':'ratio','resolution':'resolution','upscaler':'upscaler','dlss-model':'dlss_model','gpu-choice':'gpu','output':'output','quality':'quality'};
 function set(id,value){const el=$(id);if(el.type==='checkbox')el.checked=Boolean(value);else el.value=String(value);}
 function showMessage(t){$('message').textContent=t;}
 function activePreset(s=state){return Object.entries(presets).find(([,p])=>Object.keys(p).every(k=>s[k]===p[k]))?.[0]||'Custom';}
@@ -33,11 +33,11 @@ function fill(){
   for(const [id,key] of Object.entries(numberKeys))set(id,s[key]);
   for(const [id,key] of Object.entries(plainKeys))set(id,s[key]);
   set('hdr',s.hdr);set('cheats',s.cheats);
-  for(const option of $('render-height').options)option.disabled=s.output==='1080p'&&Number(option.value)>1080;
-  set('render-height',s.upscaler==='dlss'?s.render_dlss:s.render);
+  for(const option of $('render-height').options)option.disabled=(s.output==='1080p'&&Number(option.value)>1080) || (Number(option.value)<720 && (!s.upstream_latest || s.output!=='1080p'));
+  set('render-height',s.upscaler==='dlss'||s.upscaler==='fsr'?s.render_dlss:s.render);
   set('game-path',s.game);set('sdk-path',s.streamline);
   set('preset',activePreset(s));
-  $('preset-summary').textContent=activePreset(s)+' · '+(s.upscaler==='dlss'?'DLSS':'Game TAA')+' '+(s.upscaler==='dlss'?s.render_dlss:s.render)+'p · '+(s.quality==='standard'?'Standard (PS5)':s.quality);
+  $('preset-summary').textContent=activePreset(s)+' · '+(s.upscaler==='dlss'?'DLSS':s.upscaler==='fsr'?'FSR 3':'Game TAA')+' '+(s.upscaler==='dlss'||s.upscaler==='fsr'?s.render_dlss:s.render)+'p · '+(s.quality==='standard'?'Standard (PS5)':s.quality);
   $('output').disabled=false; // chenxiao07: optional native 1080p game output supports DLSS too.
  }finally{syncing=false;}
 }
@@ -47,7 +47,7 @@ function update(id){
  if(id in boolKeys)state[boolKeys[id]]=val==='true';
  else if(id in numberKeys)state[numberKeys[id]]=Number(val);
  else if(id in plainKeys)state[plainKeys[id]]=val;
- else if(id==='render-height')state[state.upscaler==='dlss'?'render_dlss':'render']=Number(val);
+ else if(id==='render-height')state[state.upscaler==='dlss'||state.upscaler==='fsr'?'render_dlss':'render']=Number(val);
  else if(id==='window-mode')state.fullscreen=val==='fullscreen';
  else if(id==='hdr')state.hdr=$('hdr').checked;
  else if(id==='cheats')state.cheats=$('cheats').checked;

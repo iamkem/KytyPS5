@@ -99,6 +99,10 @@ public:
 	void                        UpdateImage(ImageId id);
 	[[nodiscard]] ImageId       FindImageFromRange(uint64_t address, uint64_t size,
 	                                               bool ensure_valid = true);
+	// The image starting at `address` with a `width`x`height` backing (of `format`, unless undefined), the one used
+	// last if several are; `count`: how many images start there (frame generation's interface canvas, frame-gen.cpp).
+	[[nodiscard]] ImageId FindImageAt(uint64_t address, uint32_t width, uint32_t height,
+	                                  vk::Format format = vk::Format::eUndefined, uint32_t* count = nullptr);
 	[[nodiscard]] vk::ImageView FindTexture(ImageId id, const ImageDesc& desc);
 	// Whether FindTexture with `desc` uploads anything first: guest bytes the CPU wrote, a GPU buffer write over them or
 	// over the stencil plane. A sampled view of a texture whose levels below it stay dirty (RefreshTextureLevels) needs

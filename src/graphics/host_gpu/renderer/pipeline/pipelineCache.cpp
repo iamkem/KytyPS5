@@ -55,6 +55,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <iterator>
 #include <optional>
 #include <set>
 #include <span>
@@ -3198,6 +3199,28 @@ static uint32_t ReadStaticFeatures() {
 	return ReadStaticStamp().first;
 }
 
+// The release's specialization hints (tools/local/static-precompile/hints-<title>_<version>.hints, read from the
+// package's folder), which a precompile compiles what they add of.
+static std::filesystem::path StaticHintsPath() {
+	return std::filesystem::path("tools") / "local" / "static-precompile" / ("hints-" + PipelineCacheGameId() + ".hints");
+}
+
+// Their content's hash: 0 without them.
+static uint64_t StaticHintsHash() {
+	std::ifstream     file(StaticHintsPath(), std::ios::binary);
+	std::vector<char> data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+	return data.empty() ? 0 : XXH3_64bits(data.data(), data.size());
+}
+
+// The hints' hash the last precompile ran with (the .features file's third number): none from an older precompile.
+static std::optional<uint64_t> ReadStaticHintsStamp() {
+	std::ifstream file(StaticFeaturesPath());
+	uint32_t      features = 0, attempted = 0;
+	uint64_t      hints    = 0;
+	if (!(file >> features >> attempted >> std::hex >> hints)) return std::nullopt;
+	return hints;
+}
+
 // `made`: the store holds this precompile's pipelines alone. (The precompile tool's merge: the emulator has no use.)
 [[maybe_unused]] static void WriteStaticFeatures(bool made) {
 	namespace Translate = ShaderRecompiler::Frontend;
@@ -3209,7 +3232,7 @@ static uint32_t ReadStaticFeatures() {
 	temporary += ".tmp";
 	{
 		std::ofstream file(temporary, std::ios::trunc);
-		file << features << ' ' << used << '\n';
+		file << features << ' ' << used << ' ' << std::hex << StaticHintsHash() << '\n';
 		if (!file) return;
 	}
 	std::filesystem::rename(temporary, path, error);

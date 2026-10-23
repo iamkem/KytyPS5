@@ -34,6 +34,10 @@ double   ThreadCpuSeconds(uint64_t handle);
 uint64_t CurrentThreadCycles();
 // The calling thread's scheduling priority (Windows: THREAD_PRIORITY_*, -2 lowest .. 2 highest; Linux: 0).
 int CurrentThreadPriority();
+// The idle time of the logical processors this process may run on, summed, in 100 ns units, and which those are
+// (bit n: processor n; Windows: the process's group, NtQuerySystemInformation; Linux: the main thread's affinity,
+// /proc/stat's idle + iowait). False when unknown (macOS).
+bool ProcessCpusIdleTime(uint64_t* idle_100ns, uint64_t* cpus);
 
 // Total CPU seconds of the threads with this name (0 where the OS cannot enumerate them).
 double NamedThreadsCpuSeconds(const char* name);

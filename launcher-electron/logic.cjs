@@ -9,6 +9,7 @@ const defaults = Object.freeze({
   ratio: '16:9', quality: 'standard', vsync: false, hdr: false, framegen: 0,
   hud: 1, streamline: '', safegpu: false, upscaler: 'dlss', render_dlss: 1152,
   fsr: false, output: '4k', lowlatency: true, present_direct: false, antilag: false,
+  upstream_latest: false, fps30: false, dlss_model: 'auto', gpu: '',
   ram_diet: true, ram16_backing: true, ram_safety: false, texture_offload: false, stage7_ram: false, chenxiao_guard: false, vram_budget_mb: 0,
   discord_presence: false, discord_app_id: '', discord_large_image: ''
 });
@@ -19,7 +20,7 @@ const presets = Object.freeze({
   Balanced: Object.freeze({render_dlss:1152,quality:'low',fsr:false,output:'4k',upscaler:'dlss'}),
   Quality: Object.freeze({render_dlss:1440,quality:'standard',fsr:false,output:'4k',upscaler:'dlss'})
 });
-const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing','ram_safety','texture_offload','stage7_ram','chenxiao_guard','discord_presence'];
+const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing','ram_safety','texture_offload','stage7_ram','chenxiao_guard','upstream_latest','fps30','discord_presence'];
 const numericKeys = ['language','render','render_dlss','framegen','hud','vram_budget_mb'];
 function clean(candidate = {}) {
   if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) throw Error('Invalid settings object');
@@ -34,11 +35,13 @@ function clean(candidate = {}) {
   }
   if (!['standard','low','lowest'].includes(result.quality)) result.quality = 'standard';
   if (!['16:9','21:9','32:9'].includes(result.ratio)) result.ratio = '16:9';
-  if (!['dlss',''].includes(result.upscaler)) result.upscaler = '';
+  if (!['dlss','fsr',''].includes(result.upscaler)) result.upscaler = '';
+  if (!['auto','K','E'].includes(result.dlss_model)) result.dlss_model = 'auto';
+  if (!/^[a-zA-Z0-9 ._-]{0,80}$/.test(result.gpu)) result.gpu = '';
   if (!['4k','1080p'].includes(result.output)) result.output = '4k';
   if (!['1280x720','1920x1080','2560x1440','3840x2160','2560x1080','3440x1440','3840x1600','5120x2160','3840x1080','5120x1440','7680x2160'].includes(result.resolution)) result.resolution = '2560x1440';
   if (![0,4096,6144,8192,10240].includes(result.vram_budget_mb)) result.vram_budget_mb = 0;
-  if (result.render_dlss < 720 || result.render_dlss > 2160) result.render_dlss = 1152;
+  if (result.render_dlss < (result.output === '1080p' ? 360 : 720) || result.render_dlss > 2160) result.render_dlss = 1152;
   if (result.render < 720 || result.render > 2160) result.render = 1440;
   // The HD game output cannot render above its own 1080-line output.
   if (result.output === '1080p') {
@@ -121,6 +124,12 @@ function buildPlayArgs(root, raw) {
   const s = clean(raw);
   // Stage 7 remains explicit opt-in. Never combine RAM residency trials with
   // probe instrumentation or unprotected guest memory.
+  if (s.upstream_latest && (!s.ram_safety || !s.ram16_backing || s.stage7_ram || s.texture_offload))
+    throw Error('Chenxiao v20261023b requires RAM Safety and RAM16 On, Stage 7 and Texture Probe Off.');
+  if (s.upstream_latest && s.fps30 && s.fps120)
+    throw Error('Choose either 30 FPS lock or up to 120 FPS, not both.');
+  if (!s.upstream_latest && (s.upscaler === 'fsr' || s.fps30 || s.dlss_model !== 'auto'))
+    throw Error('New FSR 3 upscaling, 30 FPS lock and DLSS model require Chenxiao v20261023b On.');
   if (s.stage7_ram && (!s.ram_safety || !s.ram16_backing || s.texture_offload))
     throw Error('Stage 7 requires RAM Safety and Extended Memory (RAM16) On, Texture Residency Probe Off.');
   // chenxiao07's Windows guard-page fix is a separate v14 native candidate.
@@ -129,7 +138,9 @@ function buildPlayArgs(root, raw) {
     throw Error('Chenxiao BSOD Guard requires RAM Safety and RAM16 On, Stage 7 and Texture Probe Off.');
   // Keep the known-good emulator and other candidates intact. Adaptive mode is isolated.
   const experimentalHdDlss = s.upscaler === 'dlss' && s.output === '1080p';
-  const exe = s.stage7_ram
+  const exe = s.upstream_latest
+    ? path.join(root,'_Build','windows-chenxiao-v15','kyty_emulator.exe')
+    : s.stage7_ram
     ? path.join(root,'_Build','windows-stage7-resource','kyty_emulator.exe')
     : s.chenxiao_guard
     ? path.join(root,'_Build','windows-chenxiao-guard','kyty_emulator.exe')
@@ -138,7 +149,9 @@ function buildPlayArgs(root, raw) {
     : experimentalHdDlss
       ? path.join(root,'_Build','windows-chenxiao','kyty_emulator.exe')
       : findEmulator(root);
-  if (!fs.existsSync(exe)) throw Error(s.stage7_ram
+  if (!fs.existsSync(exe)) throw Error(s.upstream_latest
+    ? 'Chenxiao v20261023b native is missing (_Build/windows-chenxiao-v15/kyty_emulator.exe). Build the isolated integration candidate first.'
+    : s.stage7_ram
     ? 'Stage 7 experiment emulator is missing (_Build/windows-stage7-resource/kyty_emulator.exe). Build isolated native candidate first.'
     : s.chenxiao_guard
     ? 'Chenxiao BSOD Guard emulator is missing (_Build/windows-chenxiao-guard/kyty_emulator.exe). Build isolated guard candidate first.'
@@ -159,7 +172,8 @@ function buildPlayArgs(root, raw) {
   if (s.hdr) args.push('-Hdr');
   if (s.ratio !== '16:9') args.push('-Aspect',s.ratio);
   const upscale = s.upscaler === 'dlss' && Boolean(findStreamline(s,root));
-  const rh = upscale ? s.render_dlss : s.render;
+  const fsrUpscale = s.upstream_latest && s.upscaler === 'fsr';
+  const rh = (upscale || fsrUpscale) ? s.render_dlss : s.render;
   args.push('-RenderHeight',String(rh));
   if (s.quality === 'low' || s.quality === 'lowest') {
     args.push('-Quality',s.quality,'-TextureReduce',s.quality === 'lowest' ? '2' : '1');
@@ -167,6 +181,8 @@ function buildPlayArgs(root, raw) {
   if (s.fsr) args.push('-Fsr');
   if (!s.fsr && s.framegen >= 2) args.push('-FrameGen',String(s.framegen-1));
   if (upscale) args.push('-Upscaler','dlss');
+  // The original v11 run-windows.ps1 accepts only dlss; a -Set overrides
+  // KYTY_UPSCALER for the *new* native without changing any user's old script.
   // The upstream PS5 Pro path supports DLSS directly into the game's 1080p output.
   // A 1080p game output is 16:9 only; 4K remains the default for existing settings.
   if (s.output === '1080p') {
@@ -192,6 +208,13 @@ function buildPlayArgs(root, raw) {
   if (s.present_direct) vars.push('KYTY_PRESENT_DIRECT=1');
   if (s.antilag) vars.push('KYTY_ANTI_LAG=1');
   if (s.ram_diet) vars.push('KYTY_RAM_DIET=1');
+  if (s.upstream_latest) {
+    vars.push('KYTY_READ_GUARD=1','KYTY_TEXTURE_OFFLOAD=0','KYTY_TEXTURE_OFFLOAD_PROBE=0');
+    if (fsrUpscale) vars.push('KYTY_UPSCALER=fsr');
+    if (s.gpu) vars.push('KYTY_GPU='+s.gpu);
+    if (s.fps30) vars.push('KYTY_FLIP_RATE=1');
+    if (upscale && s.dlss_model !== 'auto') vars.push('KYTY_DLSS_PRESET='+s.dlss_model);
+  }
   if (s.stage7_ram) vars.push('KYTY_STAGE7_RAM=1','KYTY_TEXTURE_OFFLOAD=0','KYTY_TEXTURE_OFFLOAD_PROBE=0');
   if (s.chenxiao_guard) vars.push('KYTY_READ_GUARD=1','KYTY_TEXTURE_OFFLOAD=0','KYTY_TEXTURE_OFFLOAD_PROBE=0');
   if (s.ram16_backing) vars.push('KYTY_BACKING_FILE=1','KYTY_BACKING_ON_DEMAND=1');
@@ -214,8 +237,15 @@ function buildPlayArgs(root, raw) {
 function buildPrecompileArgs(root,raw,option='-Incremental') {
   const s = clean(raw);
   if (!gameValid(s)) throw Error('Select your installed game first.');
-  const exe = findPrecompiler(root);
-  if (!fs.existsSync(exe)) throw Error('Shader precompile utility is missing.');
+  // Never mix the newer translator and pipeline binaries with an older
+  // precompile executable. This controls *which executable* generates shards;
+  // it does not delete, replace or force a shader cache rebuild.
+  const exe = s.upstream_latest
+    ? path.join(root,'_Build','windows-chenxiao-v15','kyty_shader_precompile.exe')
+    : findPrecompiler(root);
+  if (!fs.existsSync(exe)) throw Error(s.upstream_latest
+    ? 'Chenxiao v15 shader precompile utility is missing; native precompile build required.'
+    : 'Shader precompile utility is missing.');
   return { command: path.join(process.env.SystemRoot || 'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe'),
     args:['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(root,'precompile-windows.ps1'), option,'-Exe',exe,'-Game',s.game] };
 }

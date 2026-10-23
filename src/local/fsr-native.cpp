@@ -9,11 +9,23 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#if defined(_WIN32)
+#include <malloc.h>
+#endif
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string_view>
 
-#if defined(__linux__)
+// The FidelityFX sources are built on Linux and Windows (3rdparty/fidelityfx; macOS: none). Windows' FSR frame generation
+// stays AMD's runtime (frame-gen.cpp): InterpolationRequested below is Linux's alone.
+#if defined(__linux__) || defined(_WIN32)
+#define KYTY_FSR_NATIVE 1
+#else
+#define KYTY_FSR_NATIVE 0
+#endif
+
+#if KYTY_FSR_NATIVE
 #include <FidelityFX/host/backends/vk/ffx_vk.h>
 #include <FidelityFX/host/ffx_frameinterpolation.h>
 #include <FidelityFX/host/ffx_fsr3upscaler.h>
@@ -49,13 +61,26 @@ PFN_vkVoidFunction kyty_ffx_vkGetDeviceProcAddr(VkDevice device, const char* nam
 
 namespace Libs::Graphics::FsrNative {
 
+namespace {
+std::atomic<bool> g_instead_of_dlss {false}; // UpscaleInsteadOfDlss
+} // namespace
+
 bool UpscalerRequested() {
-#if defined(__linux__)
+#if KYTY_FSR_NATIVE
 	static const bool requested = [] {
 		const char* value = std::getenv("KYTY_UPSCALER");
 		return value != nullptr && std::string_view(value) == "fsr";
 	}();
-	return requested;
+	return requested || g_instead_of_dlss.load(std::memory_order_relaxed);
+#else
+	return false;
+#endif
+}
+
+bool UpscaleInsteadOfDlss() {
+#if KYTY_FSR_NATIVE
+	g_instead_of_dlss.store(true, std::memory_order_relaxed);
+	return true;
 #else
 	return false;
 #endif
@@ -73,7 +98,7 @@ bool InterpolationRequested() {
 #endif
 }
 
-#if defined(__linux__)
+#if KYTY_FSR_NATIVE
 namespace {
 
 void Report(const char* format, auto... args) {
@@ -104,8 +129,21 @@ FfxResource ToResource(const FrameGen::UpscaleImage& image, const wchar_t* name,
 	return ffxGetResourceVK(static_cast<VkImage>(image.image), description, name, StateOf(image.layout, written));
 }
 
+// (Windows' C library has no aligned_alloc: its own aligned pair.)
+void* AlignedAlloc(size_t alignment, size_t size) {
+#if defined(_WIN32)
+	return _aligned_malloc(size, alignment);
+#else
+	return std::aligned_alloc(alignment, size);
+#endif
+}
+
 struct AlignedFree {
+#if defined(_WIN32)
+	void operator()(void* memory) const { _aligned_free(memory); }
+#else
 	void operator()(void* memory) const { std::free(memory); }
+#endif
 };
 
 // The backend interface over `contexts` effect contexts, its scratch memory owned here.
@@ -120,7 +158,7 @@ struct Backend {
 		device_context.vkDeviceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr;
 		// (The SDK keeps structures with SIMD members in its scratch memory: more than its declared alignment.)
 		const size_t size = (ffxGetScratchMemorySizeVK(device_context.vkPhysicalDevice, contexts) + 63) & ~size_t {63};
-		scratch.reset(static_cast<uint8_t*>(std::aligned_alloc(64, size)));
+		scratch.reset(static_cast<uint8_t*>(AlignedAlloc(64, size)));
 		std::memset(scratch.get(), 0, size);
 		return ffxGetInterfaceVK(&backend, ffxGetDeviceVK(&device_context), scratch.get(), size, contexts) == FFX_OK;
 	}
@@ -355,6 +393,10 @@ struct Interpolator {
 			Destroy(graphics);
 		if (!created && !Create(graphics, inputs)) return false;
 		reset |= inputs.reset;
+		// An HDR10 backbuffer is PQ: FSR takes it to linear light over a 1000-nit range (the guest's frames carry no
+		// mastering metadata), as sRGB is taken over 0..1.
+		const auto                 transfer  = inputs.pq ? FFX_BACKBUFFER_TRANSFER_FUNCTION_PQ : FFX_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
+		const std::array<float, 2> luminance = inputs.pq ? std::array<float, 2> {0.0f, 1000.0f} : std::array<float, 2> {0.0f, 1.0f};
 		// KYTY_FRAMEGEN_MV_SIGN=1 (a test): the game's vectors as they are. They point along the motion in UV units;
 		// FSR wants render pixels towards the previous position.
 		static const float mv_sign = [] {
@@ -398,8 +440,8 @@ struct Interpolator {
 		flow.opticalFlowVector          = flow_vector;
 		flow.opticalFlowSCD             = flow_scd;
 		flow.reset                      = reset;
-		flow.backbufferTransferFunction = FFX_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
-		flow.minMaxLuminance            = {0.0f, 1.0f};
+		flow.backbufferTransferFunction = transfer;
+		flow.minMaxLuminance            = {luminance[0], luminance[1]};
 		KYTY_FSR_CHECK(*this, ffxOpticalflowContextDispatch(&optical_flow, &flow));
 
 		FfxFrameInterpolationDispatchDescription dispatch {};
@@ -423,9 +465,9 @@ struct Interpolator {
 		dispatch.viewSpaceToMetersFactor    = 1.0f;
 		dispatch.frameTimeDelta             = inputs.frame_ms;
 		dispatch.reset                      = reset;
-		dispatch.backBufferTransferFunction = FFX_BACKBUFFER_TRANSFER_FUNCTION_SRGB;
-		dispatch.minMaxLuminance[0]         = 0.0f;
-		dispatch.minMaxLuminance[1]         = 1.0f;
+		dispatch.backBufferTransferFunction = transfer;
+		dispatch.minMaxLuminance[0]         = luminance[0];
+		dispatch.minMaxLuminance[1]         = luminance[1];
 		dispatch.frameID                    = frame_id;
 		dispatch.dilatedDepth               = depth_dilated;
 		dispatch.dilatedMotionVectors       = motion_dilated;

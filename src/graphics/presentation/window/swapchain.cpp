@@ -798,7 +798,7 @@ struct Presenter::Impl {
 			const FrameGen::UpscaleImage backbuffer {composed.image, composed_view, vk::ImageLayout::eGeneral, format, extent,
 			                                         composed.usage, 0, 0};
 			count = FrameGen::Generate(window.graphic_ctx, command.Handle(), frame.fg.valid && !frame.reusing_last ? &frame.fg : nullptr,
-			                           backbuffer, swapchain.PresentRegion(), outputs);
+			                           backbuffer, swapchain.PresentRegion(), outputs, frame.hdr);
 			// (A live `screenshot`: the finished frame and the frame generated before it.)
 			const auto shot      = Screenshot::Take();
 			auto       capture   = Screenshot::Record(window.graphic_ctx, command.Handle(), composed, shot);
@@ -889,7 +889,9 @@ struct Presenter::Impl {
 			const int       refresh =
 			    display >= 0 && SDL_GetCurrentDisplayMode(display, &mode) == 0 ? mode.refresh_rate : 0;
 			min_present_interval = std::chrono::nanoseconds(refresh > 0 ? 1000000000LL / refresh : 0);
-			LOGF("Presents limited to the display refresh: %d Hz\n", refresh);
+			// (In release logs too: a refresh read wrong limits what is shown, the game's own frame rate unchanged; #129.)
+			std::printf("Presents limited to the display refresh: %d Hz\n", refresh);
+			std::fflush(stdout);
 		}
 		const auto now = std::chrono::steady_clock::now();
 		// A quarter of the interval as slack: a 60 Hz guest on a 60 Hz display flips at the same
@@ -1589,7 +1591,8 @@ RenderContext& Presenter::Renderer() const noexcept {
 }
 
 bool Presenter::FlipRateApplies(const Frame& frame) noexcept {
-	return !FrameGen::Enabled() || frame.fg.valid;
+	// The game's 3D view only (with frame generation, the frames carrying its inputs): a capped movie played at half speed.
+	return FrameGen::Enabled() ? frame.fg.valid : frame.scene;
 }
 
 bool Presenter::IsSceneFrame(const Frame& frame) noexcept {
@@ -1604,10 +1607,11 @@ void Presenter::Present(Frame& frame, bool reuse) {
 	KYTY_PROFILER_FUNCTION();
 	m_impl->frames.ValidateForPresent(&frame, reuse);
 #if defined(__linux__)
-	// Linux frame generation: a new frame, and those NGX makes before it (PresentGenerated). A cleared or HDR frame goes
-	// the normal way, and DLSS-G starts again after it; a last frame shown again (an idle refresh) is not new.
+	// Linux frame generation: a new frame, and those NGX makes before it (PresentGenerated). A cleared frame, or an HDR
+	// one for DLSS-G (FSR 3 built in takes PQ frames too), goes the normal way, and generation starts again after it; a
+	// last frame shown again (an idle refresh) is not new.
 	if (FrameGen::PresenterGenerates() && !reuse) {
-		if (!frame.blank && !frame.hdr && m_impl->PresentGenerated(frame)) return;
+		if (!frame.blank && (!frame.hdr || FrameGen::PresenterGeneratesHdr()) && m_impl->PresentGenerated(frame)) return;
 		FrameGen::SwapchainChanging();
 	}
 #endif

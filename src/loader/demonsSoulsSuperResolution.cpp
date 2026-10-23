@@ -48,15 +48,22 @@ bool SetLeastHeight(Program* program, uint32_t height) {
 void Install(Program* program) {
 	const char* upscaler = std::getenv("KYTY_UPSCALER");
 	// (FSR 3 built in, Linux: any GPU, nothing to wait for on the device.)
-	const bool fsr = Libs::Graphics::FsrNative::UpscalerRequested();
+	bool fsr = Libs::Graphics::FsrNative::UpscalerRequested();
 	if (upscaler == nullptr || (std::string_view(upscaler) != "dlss" && !fsr) || program == nullptr ||
 	    !Libs::Graphics::DemonsSouls::IsSupportedGame() || program->file_name.filename() != "eboot.bin")
 		return;
 	// (The device exists by now: without DLSS on it, the game's own TAA rather than a stretch without anti-aliasing.)
 	if (!fsr && !Libs::Graphics::FrameGen::UpscalerReady()) {
-		std::printf("Demon's Souls super resolution: DLSS is not available here (an NVIDIA RTX GPU and NVIDIA's DLSS "
-		            "runtime: Streamline on Windows, libkyty_dlss.so on Linux); the game's own TAA kept\n");
-		return;
+		const char* reason = Libs::Graphics::FrameGen::UsesFsr()
+		                         ? "AMD FSR 3 frame generation runs without NVIDIA's Streamline, which DLSS needs"
+		                         : "it needs an NVIDIA RTX GPU and NVIDIA's DLSS runtime: Streamline on Windows, "
+		                           "libkyty_dlss.so on Linux";
+		if (!Libs::Graphics::FsrNative::UpscaleInsteadOfDlss()) {
+			std::printf("Demon's Souls super resolution: DLSS is not available here (%s); the game's own TAA kept\n", reason);
+			return;
+		}
+		std::printf("Demon's Souls super resolution: DLSS is not available here (%s); FSR 3 upscaling instead\n", reason);
+		fsr = true;
 	}
 	const auto site = GuestCode::FindUnique(*program, GuestCode::Pattern(CreateCheck));
 	if (!site) {

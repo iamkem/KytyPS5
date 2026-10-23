@@ -47,6 +47,15 @@ static void TrimParkedRange(uint64_t vaddr, uint64_t size);
 class ParkedRangeTrimmer {
 public:
 	static void Trim(uint64_t vaddr, uint64_t size) {
+		// KYTY_WORKING_SET_TRIM=0 (a test; the launcher's Experimental "Keep memory resident"): none, parked ranges and the
+		// texture offload's guest pages (TrimGuestRange) left to Windows: ~1.5 GB more in use on a 16 GB PC. These trims
+		// take guest pages out of the working set, as Windows had done with the page of the MEMORY_MANAGEMENT blue screen's
+		// stack (KeepResident, memory.cpp).
+		static const bool off = [] {
+			const char* value = std::getenv("KYTY_WORKING_SET_TRIM");
+			return value != nullptr && value[0] == '0';
+		}();
+		if (off) return;
 		static auto* trimmer = new ParkedRangeTrimmer; // (never destroyed: its thread may outlive static destructors)
 		{
 			std::lock_guard lock(trimmer->m_mutex);
@@ -367,6 +376,21 @@ public:
 			                                              .count()));
 		}
 	};
+
+	// Linux, the texture offload: the pages of [address, address + size) of the backing view freed
+	// (a hole punched in the store's memfd: gone from every view of them, a later read gets zeros).
+	// False elsewhere.
+	bool DiscardPages(uint64_t address, uint64_t size) {
+#if KYTY_PLATFORM == KYTY_PLATFORM_LINUX && !defined(__APPLE__)
+		const auto base = reinterpret_cast<uint64_t>(m_backing_base);
+		return IsAvailable() && address >= base && RangeOk(address - base, size) &&
+		       fallocate(m_fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+		                 static_cast<off_t>(address - base), static_cast<off_t>(size)) == 0;
+#else
+		(void)address, (void)size;
+		return false;
+#endif
+	}
 
 	bool ZeroRange(uint64_t backing_offset, uint64_t size) {
 		GuestBackingMutation mutation;
@@ -1762,6 +1786,9 @@ public:
 
 	const uint8_t* BackingPointer(uint64_t vaddr, uint64_t size) { return m_backing->BackingPointer(vaddr, size); }
 	uint64_t       BackingMappingEnd(uint64_t vaddr) { return m_backing->MappingEndOf(vaddr); }
+	bool           DiscardBacking(uint64_t address, uint64_t size) {
+		return m_backing->DiscardPages(address, size);
+	}
 	bool BackingPieces(uint64_t vaddr, uint64_t size, std::vector<std::pair<const uint8_t*, uint64_t>>& pieces) {
 		return m_backing->BackingPieces(vaddr, size, pieces);
 	}
@@ -1785,24 +1812,6 @@ public:
 		ExclusiveLock lock(m_mutex);
 		return ProtectMappedUnlocked(vaddr, size, mode);
 	}
-
-#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
-	// Re-arm a guard page after a read-guard fault, synchronized with guest map/unmap.
-	// Private guest stacks are deliberately not accepted as backing mappings.
-	bool ArmReadGuard(uint64_t vaddr) {
-		constexpr uint64_t Page = 0x1000;
-		const uint64_t page = vaddr & ~(Page - 1);
-		std::shared_lock lock(m_mutex);
-		WaitNotBusy(lock, page, Page);
-		auto it = m_mapped.upper_bound(page);
-		if (it == m_mapped.begin()) return false;
-		--it;
-		const auto& region = it->second;
-		if (region.type != MappingType::Backing || page + Page > region.vaddr + region.size) return false;
-		DWORD old = 0;
-		return VirtualProtect(reinterpret_cast<void*>(page), Page, PAGE_GUARD | PAGE_READONLY, &old) != 0;
-	}
-#endif
 
 	// Returns once no change of the address space is under way (Memory::WriteBacking: a partial unmap's views mapped
 	// again).
@@ -1859,6 +1868,24 @@ public:
 		WaitNotBusy(lock, vaddr, size);
 		return ProtectMappedUnlocked(vaddr, size, mode);
 	}
+
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+	// KYTY_READ_GUARD: the 4 KiB page of `vaddr` guarded again after its guard raised a fault, when it is a guest view's
+	// (true); as the trackers' protections, after any map or unmap over it.
+	bool ArmReadGuard(uint64_t vaddr) {
+		constexpr uint64_t Page = 0x1000;
+		const uint64_t     page = vaddr & ~(Page - 1);
+		std::shared_lock   lock(m_mutex);
+		WaitNotBusy(lock, page, Page);
+		auto it = m_mapped.upper_bound(page);
+		if (it == m_mapped.begin()) return false;
+		--it;
+		const auto& region = it->second;
+		if (region.type != MappingType::Backing || page + Page > region.vaddr + region.size) return false;
+		DWORD old = 0;
+		return VirtualProtect(reinterpret_cast<void*>(page), Page, PAGE_GUARD | PAGE_READONLY, &old) != 0;
+	}
+#endif
 
 	bool MapBacking(uint64_t vaddr, uint64_t size, uint64_t backing_offset,
 	                VirtualMemory::Mode               mode,

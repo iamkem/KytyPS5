@@ -318,6 +318,11 @@ fi
 # The shards share the pipelines they hold (PipelineBinaryWriter::Claimed): one that several shards make is compiled once.
 export KYTY_PRECOMPILE_CLAIMS="$CACHES/claims"
 mkdir -p "$KYTY_PRECOMPILE_CLAIMS"
+# Pipelines the graphics driver never finished compiling (a shard's hang guard: exit 4, issue #126), listed here: every
+# shard leaves them out.
+STUCK_LIST="$ROOT/$LOGS/stuck-pipelines.txt"
+export KYTY_PRECOMPILE_STUCK="$STUCK_LIST"
+RESTARTED=0
 DONE_COUNT=0
 SPLIT=0
 SHOWN=$(date +%s)
@@ -378,6 +383,16 @@ while [ ${#FIRST[@]} -gt 0 ] || [ ${#SECOND[@]} -gt 0 ] || [ ${#RUN_PID[@]} -gt 
 			halves=("$seed_file$TAB$i/$((2 * n))" "$seed_file$TAB$((i + n))/$((2 * n))")
 			if [ "$seed_file" = "$RECORDED" ]; then FIRST+=("${halves[@]}"); else SECOND+=("${halves[@]}"); fi
 			SPLIT=$((SPLIT + 1))
+		elif [ "$rc" = 4 ]; then
+			# A pipeline the driver never finished compiling (named in the shard's log and in stuck-pipelines.txt): the
+			# shard starts again without it, what it made kept (its .part file, merged like the shards').
+			RESTARTED=$((RESTARTED + 1))
+			[ "$RESTARTED" -le 100 ] || die "more than 100 shards stopped at pipelines the driver never finished; logs: $LOGS"
+			for stream in out err; do
+				[ -f "$ROOT/$LOGS/$name.$stream.log" ] && mv "$ROOT/$LOGS/$name.$stream.log" "$ROOT/$LOGS/$name.stuck$RESTARTED.$stream.log"
+			done
+			if [ "$seed_file" = "$RECORDED" ]; then FIRST+=("$seed_file$TAB$shard"); else SECOND+=("$seed_file$TAB$shard"); fi
+			echo "  $(elapsed) $name: the graphics driver never finished compiling a pipeline; started again without it"
 		elif [ "$rc" != 0 ]; then
 			die "$name failed (exit code $rc); logs: $LOGS"
 		else
@@ -389,7 +404,7 @@ while [ ${#FIRST[@]} -gt 0 ] || [ ${#SECOND[@]} -gt 0 ] || [ ${#RUN_PID[@]} -gt 
 		echo "  $(elapsed) shards: $DONE_COUNT done, ${#RUN_PID[@]} running, $(( ${#FIRST[@]} + ${#SECOND[@]} )) waiting ($SPLIT split)"
 	fi
 done
-unset KYTY_PRECOMPILE_CLAIMS
+unset KYTY_PRECOMPILE_CLAIMS KYTY_PRECOMPILE_STUCK
 # (--quick: what the store held of the other shaders stays. Recorded play that could not be gathered: the pipelines an
 # earlier run made for it stay too.) (--stamp: the store's translation features, those this run used.)
 merge_arguments=(--merge --stamp)
@@ -399,6 +414,9 @@ run_precompile merge merge "${merge_arguments[@]}"
 cache="$(ls -t "$ROOT/_PipelineCache/static/$ID".{bin,binaries,blobs} 2>/dev/null | head -1)"
 if [ -n "$cache" ]; then
 	echo "done in $(elapsed): $cache ($(( $(stat -c %s "$cache") / 1048576 )) MB; $SPLIT shards split)"
+	if [ -f "$STUCK_LIST" ]; then
+		echo "$(wc -l < "$STUCK_LIST") pipeline(s) left out: the graphics driver never finished compiling them ($LOGS/stuck-pipelines.txt). The game compiles them when it first needs them and may stop there the same way: please report it on GitHub with that file."
+	fi
 else
 	echo "done in $(elapsed), but there is no _PipelineCache/static/$ID.bin, .binaries or .blobs: see the logs in $LOGS"
 	exit 1

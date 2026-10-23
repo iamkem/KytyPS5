@@ -19,14 +19,25 @@
 //   KYTY_DUALSENSE_HAPTICS=0|1     off when 0 (default: on)
 //   KYTY_DUALSENSE_HAPTICS_CHANNELS=23|01|all   which of the endpoint's channels take the vibration
 //                                  (default: 23, the actuator pair)
-//   KYTY_DUALSENSE_HAPTICS_GAIN=<float>         applied to the vibration samples (default: 1.0)
+//   KYTY_DUALSENSE_HAPTICS_GAIN=<float>         applied to the vibration samples (default: 4.0 - the
+//                                  actuators are felt rather than heard, and at 1.0 they are barely
+//                                  there in play)
 //   KYTY_DUALSENSE_SPEAKER_CHANNELS=01|23|all   the same for the pad speaker (default: 01)
-//   KYTY_DUALSENSE_SPEAKER_GAIN=<float>         0..64 (default: 8.0, +18 dB). What the guest sends
-//                                  to a pad speaker port is quiet - Demon's Souls peaks at about
-//                                  -40 dB - and the controller's own amplifier then buries it in
-//                                  its noise floor, so the digital gain is what makes it clear.
-//                                  8 is clear, 16 borderline, 32 clips (4.0 is what
-//                                  github.com/Jetsku/KytyPS5's launcher gives at 200%).
+//   KYTY_DUALSENSE_SPEAKER_GAIN=<float>         0..64, default 1.0 (unity). The pad's own amplifier and
+//                                  the +6 dB preamp below make the speaker audible; digital gain on
+//                                  top of them clips inside the pad, heard as tearing rather than as
+//                                  loudness - which is what the released 8.0 (+18 dB) here did. The Bluetooth
+//                                  route uses the same unity gain, so both routes sound alike.
+//   KYTY_DUALSENSE_SPEAKER_PREAMP=0|1  the controller's own +6 dB speaker preamp (default: on).
+//                                  github.com/Jetsku/KytyPS5 sends it, Linux does too, and so does
+//                                  that add-on - so it is the preamp plus too much gain, not the
+//                                  preamp alone, that clips. Turn it off to buy 6 dB of headroom.
+//   KYTY_DUALSENSE_SPEAKER_VOLUME=0..100  the controller's own volume (default: 100). Lowering it
+//                                  leaves its amplifier more headroom, and the gain above takes over
+//                                  the loudness.
+//   KYTY_DUALSENSE_SPEAKER_LIMITER=0|1  a soft limiter above 0.8 on the speaker route (default: off):
+//                                  loud moments bend towards full scale instead of clamping, which is
+//                                  what the controller's amplifier then finds hard to take.
 //   KYTY_DUALSENSE_HAPTICS_LOG=1   prints what it finds and what it writes (default: off)
 namespace Libs::Controller::DualSenseHaptics {
 

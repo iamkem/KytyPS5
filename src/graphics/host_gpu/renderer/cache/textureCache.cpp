@@ -361,7 +361,7 @@ TextureCache::TextureCache(GraphicContext& graphics, CommandScheduler& scheduler
 	// Collection starts where the video memory use reaches the budget less its headroom (GetTotalMemoryBudget):
 	// below it a kept image costs nothing, a deleted one an upload when the game uses it again.
 	m_trigger_gc_memory = m_graphics.GetTotalMemoryBudget();
-#if defined(_WIN32)
+#if KYTY_TEXTURE_OFFLOAD_SUPPORTED
 	if (TextureOffload::Enabled()) {
 		const bool offload = TextureOffload::GetMode() == TextureOffload::Mode::Offload;
 		g_offload_cache    = this;
@@ -2450,7 +2450,24 @@ bool TextureCache::UploadImageChunked(Image& image, const std::vector<std::pair<
 	}
 	std::sort(order.begin(), order.end(),
 	          [&](size_t left, size_t right) { return plan.tiles[left].tiled_offset < plan.tiles[right].tiled_offset; });
-	const auto                       start = std::chrono::steady_clock::now();
+	// A whole upload's tiles over no mapped guest memory: zeros, what their staged copy reads (ReadMappedOrZero),
+	// written on the GPU instead of staged, detiled and copied. Texture pools' released layers were most of their bytes
+	// at Stonefang 2-1's entry (10-23: 202 of 352 MiB and 167 of 256 MiB; a 1.47 GB pool's upload made a 780 ms
+	// frame with an 8 GB video memory budget, 234 ms with 32 GB).
+	std::vector<bool> unmapped;
+	if (only == nullptr) {
+		RangeSet mapped;
+		m_buffer_cache.MappedRanges(base, info.data.size, mapped);
+		unmapped.resize(plan.tiles.size());
+		// (Not over GPU-written bytes: their upload reads the buffer the GPU wrote, ObtainBufferForImage's "gpu" path.)
+		for (size_t index = 0; index < plan.tiles.size(); index++) {
+			const auto& tile = plan.tiles[index];
+			unmapped[index]  = !mapped.Intersects(base + tile.tiled_offset, tile.tiled_size) &&
+			                  !m_buffer_cache.IsRegionGpuModified(base + tile.tiled_offset, tile.tiled_size);
+		}
+	}
+	const auto skipped = [&](size_t index) { return !unmapped.empty() && unmapped[index]; };
+	const auto start   = std::chrono::steady_clock::now();
 	std::vector<GpuTileInfo>         tiles;
 	std::vector<vk::BufferImageCopy> regions;
 	uint64_t                         pieces     = 0;
@@ -2460,7 +2477,7 @@ bool TextureCache::UploadImageChunked(Image& image, const std::vector<std::pair<
 		const auto& first   = plan.tiles[order[at]];
 		uint64_t    begin   = base + first.tiled_offset;
 		uint64_t    end     = begin + first.tiled_size;
-		if (!selected(begin, end)) {
+		if (!selected(begin, end) || skipped(order[at])) {
 			at++;
 			continue;
 		}
@@ -2471,7 +2488,7 @@ bool TextureCache::UploadImageChunked(Image& image, const std::vector<std::pair<
 			const uint64_t tile_begin = base + tile.tiled_offset;
 			const uint64_t tile_end   = tile_begin + tile.tiled_size;
 			if (std::max(end, tile_end) - begin > ChunkedUploadPiece || !selected(tile_begin, tile_end) ||
-			    m_buffer_cache.IsRegionGpuModified(tile_begin, tile.tiled_size)) {
+			    skipped(order[next]) || m_buffer_cache.IsRegionGpuModified(tile_begin, tile.tiled_size)) {
 				break;
 			}
 			end = std::max(end, tile_end);
@@ -2508,6 +2525,27 @@ bool TextureCache::UploadImageChunked(Image& image, const std::vector<std::pair<
 		uploaded += end - begin;
 		at = next;
 	}
+	uint64_t zero_bytes = 0;
+	if (!unmapped.empty()) {
+		uint64_t zero_size = 0;
+		regions.clear();
+		for (size_t index = 0; index < plan.tiles.size(); index++) {
+			if (!unmapped[index]) continue;
+			auto region = plan.regions[index];
+			region.bufferOffset -= plan.tiles[index].linear_offset; // (into one tile's zeros: they all read the same)
+			regions.push_back(region);
+			zero_size = std::max(zero_size, plan.tiles[index].linear_size);
+			zero_bytes += plan.tiles[index].tiled_size;
+		}
+		if (!regions.empty()) {
+			const auto zeros = m_tiler.GetScratchBuffer(zero_size);
+			m_scheduler.EndRendering();
+			m_scheduler.Current().Handle().fillBuffer(zeros.buffer, zeros.offset, zeros.size, 0);
+			for (auto& region: regions) region.bufferOffset += zeros.offset;
+			image.Upload(regions, zeros.buffer, zeros.offset, zeros.size); // (its barrier waits for the fill)
+			LiveCounters::Add(LiveCounters::UnmappedUploadBytes, zero_bytes);
+		}
+	}
 	if (only != nullptr) {
 		LiveCounters::Add(LiveCounters::PartialUploads);
 		LiveCounters::Add(LiveCounters::PartialUploadBytes, uploaded);
@@ -2529,10 +2567,10 @@ bool TextureCache::UploadImageChunked(Image& image, const std::vector<std::pair<
 	static std::atomic<uint32_t> reports {0};
 	if (reports.fetch_add(1, std::memory_order_relaxed) < 64) {
 		std::printf("TextureCache: chunked upload addr=0x%llx size=0x%llx layers=%u levels=%u: %llu pieces (%llu with "
-		            "GPU-written bytes) in %.1f ms\n",
+		            "GPU-written bytes), %llu MiB over unmapped memory as zeros, in %.1f ms\n",
 		            static_cast<unsigned long long>(base), static_cast<unsigned long long>(info.data.size),
 		            info.resources.layers, info.resources.levels, static_cast<unsigned long long>(pieces),
-		            static_cast<unsigned long long>(gpu_pieces),
+		            static_cast<unsigned long long>(gpu_pieces), static_cast<unsigned long long>(zero_bytes >> 20u),
 		            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
 	}
 	return true;
@@ -3391,6 +3429,34 @@ bool TextureCache::NewImageStartsSince(uint64_t epoch, std::vector<std::pair<uin
 	return true;
 }
 
+ImageId TextureCache::FindImageAt(uint64_t address, uint32_t width, uint32_t height, vk::Format format, uint32_t* count) {
+	if (count != nullptr) *count = 0;
+	if (!GuestRange {address, 1}.Valid()) {
+		return {};
+	}
+	std::scoped_lock lock {m_lock};
+	if (!MayStartAt(address) || !m_image_starts.contains(address)) {
+		return {};
+	}
+	ImageId  selected {};
+	uint64_t last = 0;
+	for (const auto id: FindImagesInRegion(address, 1, false)) {
+		const auto* image = m_slot_images.try_get(id);
+		if (image == nullptr || image->info.data.address != address) continue;
+		if (count != nullptr) ++*count;
+		if (image->backing.image == nullptr || image->backing.extent.width != width ||
+		    image->backing.extent.height != height ||
+		    (format != vk::Format::eUndefined && image->backing.format != format)) {
+			continue;
+		}
+		if (!selected || image->frame_accessed_last >= last) {
+			selected = id;
+			last     = image->frame_accessed_last;
+		}
+	}
+	return selected;
+}
+
 ImageId TextureCache::FindImageFromRange(uint64_t address, uint64_t size, bool ensure_valid) {
 	if (!GuestRange {address, size}.Valid()) {
 		return {};
@@ -3993,7 +4059,7 @@ std::unique_ptr<Buffer> TextureCache::StageOffloadDownloads(std::vector<std::pai
 // a row (GPU work never wrote it, no CPU write since its upload, tracked whole) has its whole pages probed, or dropped
 // once a download of it gave its guest bytes back exactly (checked here first, 16 MiB of images a scan by default).
 void TextureCache::OffloadScan(uint64_t tick) {
-#if defined(_WIN32)
+#if KYTY_TEXTURE_OFFLOAD_SUPPORTED
 	const bool offload = TextureOffload::GetMode() == TextureOffload::Mode::Offload;
 	TextureOffload::Drain();
 	TextureOffload::Report(false);
@@ -4146,20 +4212,23 @@ void TextureCache::OffloadScan(uint64_t tick) {
 			continue;
 		}
 		mark = Clock::now();
-		for (const auto& piece: pieces) (void)TextureOffload::Protect(piece.backing, piece.size, PAGE_NOACCESS);
+		for (const auto& piece: pieces)
+			(void)TextureOffload::Protect(piece.backing, piece.size, TextureOffload::Access::None);
 		ms[4] += since(mark);
 	}
 	// The pages dropped by the worker thread (DiscardVirtualMemory took 10-90 ms of the render thread a scan): until then
 	// they hold their bytes, and a restore meanwhile has nothing to wait for.
 	if (!discards.empty()) {
 		OffloadWorker::Post([discards = std::move(discards)] {
-			// (KYTY_TEXTURE_OFFLOAD_TRIM=0: the guest view's pages left to Windows.)
+			// (Windows, KYTY_TEXTURE_OFFLOAD_TRIM=0: the guest view's pages left to Windows. Linux:
+			// the hole freed them.)
 			static const bool trim = [] {
 				const char* value = std::getenv("KYTY_TEXTURE_OFFLOAD_TRIM");
 				return value == nullptr || value[0] != '0';
 			}();
 			for (const auto& [begin, size]: discards)
-				if (TextureOffload::DiscardRange(begin) && trim) Libs::LibKernel::Memory::TrimGuestRange(begin, size);
+				if (TextureOffload::DiscardRange(begin) && trim)
+					Libs::LibKernel::Memory::TrimGuestRange(begin, size);
 		});
 	}
 	if (check.empty()) {
@@ -4244,7 +4313,7 @@ void TextureCache::OffloadScan(uint64_t tick) {
 // Render thread: the discarded ranges over [vaddr, vaddr + size) downloaded back from their images in one submission,
 // the render thread waiting for it; their read watchers then go.
 void TextureCache::RestoreOffloaded(uint64_t vaddr, uint64_t size, uint8_t touch_value, bool async) {
-#if defined(_WIN32)
+#if KYTY_TEXTURE_OFFLOAD_SUPPORTED
 	const auto touch  = static_cast<TextureOffload::Touch>(touch_value);
 	auto       ranges = TextureOffload::BeginRestore(vaddr, size, touch, touch == TextureOffload::Touch::Count, async);
 	if (ranges.empty()) return;
@@ -4261,7 +4330,9 @@ void TextureCache::RestoreOffloaded(uint64_t vaddr, uint64_t size, uint8_t touch
 	uint64_t         total = 0, bytes = 0, lost = 0;
 	for (size_t i = 0; i < ranges.size(); i++) {
 		const auto& range = ranges[i];
-		for (const auto& piece: range.pieces) (void)TextureOffload::Protect(piece.backing, piece.size, PAGE_READWRITE);
+		for (const auto& piece: range.pieces)
+			(void)TextureOffload::Protect(piece.backing, piece.size,
+			                              TextureOffload::Access::ReadWrite);
 		auto* image = m_slot_images.try_get(ImageId {static_cast<uint32_t>(range.image), static_cast<uint32_t>(range.image >> 32u)});
 		auto  plan  = image != nullptr && image->serial == range.serial && image->backing.image != nullptr ? BuildDownload(*image)
 		                                                                                                 : DownloadPlan {};
