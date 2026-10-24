@@ -532,15 +532,58 @@ bool ProcessCpusIdleTime(uint64_t* idle_100ns, uint64_t* cpus) {
 	return mask != 0;
 }
 
+void KeptFileCloser();
+
 namespace {
 struct KeptFile {
 	HANDLE   handle     = INVALID_HANDLE_VALUE;
 	uint64_t size       = 0;
 	bool     prefetched = false;
 	bool     ahead      = false; // opened by FollowKeptFiles's threads, not read by the game yet
+	uint32_t readers    = 0;     // OpenKeptReadFile calls whose DoneKeptReadFile has not come yet
+	uint64_t stamp      = 0;     // (g_kept_stamp when last queued to close: an older entry of a queue is stale)
 };
 std::mutex                                g_kept_files_mutex;
-std::unordered_map<std::string, KeptFile> g_kept_files; // (never closed: the game's files, read-only)
+std::unordered_map<std::string, KeptFile> g_kept_files; // (the game's files, read-only)
+
+// Kept files are closed once unread for a while (KeptFileCloser). While a file is open, the system file cache's view of
+// what was read through it stays mapped, in the system's working set: memory in use, not available. The game reads tens
+// of thousands of small files whole (~28,500 to load 1-1), each kept open: after 1-1 and four world trips the "\Memory\Cache
+// Bytes" counter stood at 6.6-8 GB more than before the boot (back at exit), on top of the emulator's own memory. Closed,
+// a file's pages go to the standby list: still cached (a later read of them waits for no disk) but available memory,
+// which Windows reuses before it trims any program's working set. (A big file read in pieces keeps ~100 MiB mapped
+// however much is read: the ZArchive's one file.)
+struct IdleKeptFile {
+	uint64_t    at    = 0; // (GetTickCount64)
+	uint64_t    stamp = 0;
+	std::string path;
+};
+std::deque<IdleKeptFile> g_idle_read, g_idle_ahead; // reads done and files opened ahead, oldest first (g_kept_files_mutex)
+uint64_t                 g_kept_stamp = 0;          // (g_kept_files_mutex)
+
+// After how long unread a file read by the game closes: 10 s (an audio stream being played reads a piece every second
+// or so and stays open), KYTY_FILE_IDLE_CLOSE=<seconds> (0: never, as before). A file opened ahead and not read by the
+// game closes after 2 minutes (no cache view: only its handle).
+uint64_t IdleCloseMs() {
+	static const uint64_t ms = [] {
+		const char* value = std::getenv("KYTY_FILE_IDLE_CLOSE");
+		return value != nullptr && *value != '\0' ? std::strtoull(value, nullptr, 10) * 1000 : uint64_t {10000};
+	}();
+	return ms;
+}
+
+uint64_t AheadCloseMs() {
+	return std::max<uint64_t>(IdleCloseMs(), 120000);
+}
+
+// (g_kept_files_mutex held) `kept`, the file of `path`, closes once unread for the queue's wait.
+void QueueIdleLocked(std::deque<IdleKeptFile>& queue, KeptFile& kept, const std::string& path) {
+	if (IdleCloseMs() == 0) return;
+	kept.stamp = ++g_kept_stamp;
+	queue.push_back({GetTickCount64(), kept.stamp, path});
+	static std::once_flag started;
+	std::call_once(started, [] { std::thread(KeptFileCloser).detach(); });
+}
 
 std::wstring WidePath(const std::string& path) {
 	const int wide_size = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
@@ -596,6 +639,7 @@ struct FileFollow {
 	std::unordered_map<std::string, uint32_t> index; // host path -> place in the recording
 	std::vector<const std::string*>           paths; // index's keys in recorded order
 	std::vector<uint8_t>                      queued; // per place: queued, opened or opened by the game
+	std::vector<uint64_t>                     closed; // per place: when KeptFileCloser closed it (GetTickCount64), or 0
 	std::deque<uint32_t>                      queue;
 	std::string                               root; // (with its separator)
 	FILE*                                     out       = nullptr;
@@ -607,6 +651,10 @@ FileFollow g_follow;
 // windows of 256, 24.3 s with 8 and 512, 17.6-20.6 s with 16 and 1024, 18.8 s with 32 and 2048. (KYTY_FILE_FOLLOW_WINDOW,
 // KYTY_FILE_FOLLOW_THREADS: other counts.)
 uint32_t g_follow_window = 1024, g_follow_threads = 16;
+// A file closed unread for a while is opened ahead again only this long after (a world visited again): the game reads in
+// an order of its own, and windows of files it read a moment before opened again those just closed (25-60 thousand
+// opens a minute through a tour of four worlds, 45-90 thousand files open at once).
+constexpr uint64_t FollowAgainMs = 5 * 60 * 1000;
 
 void FollowOpenThread() {
 	SetThreadName("Kyty.FileOpen");
@@ -636,7 +684,63 @@ void FollowOpenThread() {
 		const std::lock_guard lock(g_kept_files_mutex);
 		const auto [kept, added] =
 		    g_kept_files.try_emplace(path, KeptFile {handle, static_cast<uint64_t>(length.QuadPart), false, true});
-		if (!added) CloseHandle(handle);
+		if (!added) {
+			CloseHandle(handle);
+			continue;
+		}
+		QueueIdleLocked(g_idle_ahead, kept->second, path);
+	}
+}
+
+void KeptFileCloser() {
+	SetThreadName("Kyty.FileClose");
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+	std::vector<HANDLE>      handles;
+	std::vector<std::string> paths;
+	uint64_t                 read = 0, ahead = 0, reported = GetTickCount64();
+	for (;;) {
+		std::this_thread::sleep_for(std::chrono::seconds(1));
+		const uint64_t now  = GetTickCount64();
+		size_t         open = 0;
+		{
+			const std::lock_guard lock(g_kept_files_mutex);
+			const auto expire = [&](std::deque<IdleKeptFile>& queue, uint64_t wait) {
+				for (; !queue.empty() && now - queue.front().at >= wait; queue.pop_front()) {
+					const auto found = g_kept_files.find(queue.front().path);
+					// (Being read, or queued again since: a later entry has it.)
+					if (found == g_kept_files.end() || found->second.readers != 0 || found->second.stamp != queue.front().stamp)
+						continue;
+					handles.push_back(found->second.handle);
+					g_kept_files.erase(found);
+					paths.push_back(std::move(queue.front().path));
+				}
+			};
+			expire(g_idle_read, IdleCloseMs());
+			const size_t after_reads = handles.size();
+			expire(g_idle_ahead, AheadCloseMs());
+			read += after_reads;
+			ahead += handles.size() - after_reads;
+			open = g_kept_files.size();
+		}
+		if (handles.empty()) continue;
+		for (const auto handle: handles)
+			CloseHandle(handle);
+		{
+			// (Followed again after FollowAgainMs.)
+			const std::lock_guard lock(g_follow.mutex);
+			for (const auto& path: paths)
+				if (const auto found = g_follow.index.find(path); found != g_follow.index.end()) g_follow.closed[found->second] = now;
+		}
+		handles.clear();
+		paths.clear();
+		if (now - reported >= 60000) {
+			std::printf("Files: in the last %.0f s %llu of the game's closed %.0f s after its last read (the data stays cached "
+			            "as available memory), %llu opened ahead and not read; %zu open\n",
+			            static_cast<double>(now - reported) / 1000.0, static_cast<unsigned long long>(read),
+			            static_cast<double>(IdleCloseMs()) / 1000.0, static_cast<unsigned long long>(ahead), open);
+			read = ahead = 0;
+			reported     = now;
+		}
 	}
 }
 
@@ -650,6 +754,7 @@ void FollowFrom(const std::string& path) {
 		const auto added = g_follow.index.emplace(path, place).first;
 		g_follow.paths.push_back(&added->first);
 		g_follow.queued.push_back(1);
+		g_follow.closed.push_back(0);
 		if (g_follow.out != nullptr) {
 			const bool under = !g_follow.root.empty() && path.starts_with(g_follow.root);
 			std::fprintf(g_follow.out, "%s\n", path.c_str() + (under ? g_follow.root.size() : 0));
@@ -661,12 +766,15 @@ void FollowFrom(const std::string& path) {
 		return;
 	}
 	g_follow.queued[found->second] = 1;
+	g_follow.closed[found->second] = 0;
 	// Ahead of the windows queued before (the game left them, or is past them): the next file first.
-	const auto end = std::min<size_t>(size_t {found->second} + 1 + g_follow_window, g_follow.paths.size());
-	bool       any = false;
+	const auto     end = std::min<size_t>(size_t {found->second} + 1 + g_follow_window, g_follow.paths.size());
+	const uint64_t now = GetTickCount64();
+	bool           any = false;
 	for (auto place = end; place-- > size_t {found->second} + 1;)
-		if (g_follow.queued[place] == 0) {
+		if (g_follow.queued[place] == 0 || (g_follow.closed[place] != 0 && now - g_follow.closed[place] >= FollowAgainMs)) {
 			g_follow.queued[place] = 1;
+			g_follow.closed[place] = 0;
 			g_follow.queue.push_front(static_cast<uint32_t>(place));
 			any = true;
 		}
@@ -680,6 +788,7 @@ uint64_t OpenKeptReadFile(const std::string& path, uint64_t* size) {
 			*size              = found->second.size;
 			const auto handle  = reinterpret_cast<uint64_t>(found->second.handle);
 			const bool first   = std::exchange(found->second.ahead, false);
+			found->second.readers++;
 			lock.unlock();
 			if (first) FollowFrom(path);
 			return handle;
@@ -701,8 +810,17 @@ uint64_t OpenKeptReadFile(const std::string& path, uint64_t* size) {
 	const std::lock_guard lock(g_kept_files_mutex);
 	const auto [kept, added] = g_kept_files.try_emplace(path, KeptFile {handle, static_cast<uint64_t>(length.QuadPart)});
 	if (!added) CloseHandle(handle); // (another thread opened it meanwhile: its handle is the one kept)
+	kept->second.ahead = false;
+	kept->second.readers++;
 	*size = kept->second.size;
 	return reinterpret_cast<uint64_t>(kept->second.handle);
+}
+
+void DoneKeptReadFile(const std::string& path) {
+	const std::lock_guard lock(g_kept_files_mutex);
+	const auto            found = g_kept_files.find(path);
+	if (found != g_kept_files.end() && found->second.readers != 0 && --found->second.readers == 0)
+		QueueIdleLocked(g_idle_read, found->second, path);
 }
 
 uint32_t ReadOpenFileAt(uint64_t file, uint64_t offset, void* buffer, uint32_t size) {
@@ -747,6 +865,7 @@ void FollowKeptFiles(const std::string& recording, const std::string& root) {
 			std::fclose(in);
 		}
 		g_follow.queued.assign(g_follow.paths.size(), 0);
+		g_follow.closed.assign(g_follow.paths.size(), 0);
 		std::error_code error;
 		std::filesystem::create_directories(std::filesystem::path(recording).parent_path(), error);
 		g_follow.out = std::fopen(recording.c_str(), "ab");
@@ -1744,6 +1863,8 @@ uint64_t OpenKeptReadFile(const std::string& /*path*/, uint64_t* /*size*/) {
 uint32_t ReadOpenFileAt(uint64_t /*file*/, uint64_t /*offset*/, void* /*buffer*/, uint32_t /*size*/) {
 	return 0;
 }
+
+void DoneKeptReadFile(const std::string& /*path*/) {}
 
 void PrefetchKeptFile(const std::string& /*path*/) {}
 

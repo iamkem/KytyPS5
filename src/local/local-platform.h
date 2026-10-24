@@ -44,11 +44,15 @@ double NamedThreadsCpuSeconds(const char* name);
 // The process's threads: (thread id, name; empty when it has none). Windows only (Linux: none).
 std::vector<std::pair<uint32_t, std::string>> ProcessThreads();
 
-// A read-only host file kept open for the process (opened once a path, never closed) and its size, for positional
-// reads from any thread (ReadOpenFileAt). 0: it cannot be opened, or (Linux) none are kept: open it for each read.
+// A read-only host file kept open (one handle a path) and its size, for positional reads from any thread
+// (ReadOpenFileAt) until the call's DoneKeptReadFile; once unread for a while it is closed (Windows: 10 s,
+// KYTY_FILE_IDLE_CLOSE=<seconds>, 0 never) and a later call opens it again. 0: it cannot be opened, or (Linux) none are
+// kept: open it for each read.
 uint64_t OpenKeptReadFile(const std::string& path, uint64_t* size);
 // Up to `size` bytes at `offset` of a kept file; the bytes read (0 at the end or on an error).
 uint32_t ReadOpenFileAt(uint64_t file, uint64_t offset, void* buffer, uint32_t size);
+// The reads of an OpenKeptReadFile call ended (each call that returned a file has one): its handle is not used any more.
+void DoneKeptReadFile(const std::string& path);
 // A kept file read whole once, in the background (the first call for the path; Windows only): its later reads come from
 // the system file cache.
 void PrefetchKeptFile(const std::string& path);

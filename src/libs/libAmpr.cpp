@@ -1592,6 +1592,10 @@ static int ReadHostFileToGuest(const std::string& host_path, uint64_t file_offse
 		LocalPlatform::FollowKeptFiles(recording, root);
 	});
 	if (uint64_t kept_size = 0; const auto kept = LocalPlatform::OpenKeptReadFile(host_path, &kept_size)) {
+		const struct Done {
+			const std::string& path;
+			~Done() { LocalPlatform::DoneKeptReadFile(path); }
+		} done {host_path};
 		opening = Clock::now() - start;
 		if (file_offset >= kept_size) {
 			return OK;
