@@ -14,6 +14,7 @@
 #include "common/virtualMemory.h"
 #include "graphics/guest_gpu/graphicsRun.h"
 #include "graphics/host_gpu/renderer/cache/gpuResourceManager.h"
+#include "graphics/host_gpu/renderer/demonsSouls.h"
 #include "libs/errno.h"
 #include "libs/libs.h"
 #include "native-resource-state.h"
@@ -3325,19 +3326,23 @@ int KYTY_SYSV_ABI KernelMunmap(uint64_t vaddr, size_t len) {
 	return result;
 }
 
-// KYTY_DIRECT_MEMORY_MB=<n> (a test): the game is told it has at most n MiB of direct memory (sceKernelGetDirectMemorySize;
-// sceKernelAvailableDirectMemorySize and sceKernelAllocateMainDirectMemory search below it). The engine takes all it is
-// told at start-up (PlatformPageAllocator::Init, eboot 0x80c200: a base PS5's 12 GiB, more pre-mapped as a devkit's
-// extra; we have 12.5) and over a session writes nearly all of it: its texture streamer keeps loading textures until
-// ~400 MiB are left (texturePoolLowMemoryLimitMiBs + texturePoolLowMemStopStreamingOffsetMiBs), and its page allocator
-// takes its never-used pages before those it freed. Told 11 GiB, the streamer held 2.4-2.8 GiB of textures at Boletaria
-// instead of 4.0 and the game's memory in RAM fell 8.73 -> 7.54 GiB (16 GB policy, Boletaria and four worlds), but the
-// game is not made for it: a tour of every map with its enemies killed crashed in 1-1 (job workers calling through an
-// object whose vtable was zero) and in 1-4 (a null read) within the first four maps. Not a default.
+// The direct memory the game is told it has (sceKernelGetDirectMemorySize; sceKernelAvailableDirectMemorySize and
+// sceKernelAllocateMainDirectMemory search below it): for Demon's Souls 12 GiB, a base PS5's (other games: all of it,
+// as before). Demon's Souls' engine takes all it is told
+// at start-up (PlatformPageAllocator::Init, eboot 0x80c200, whose constants are a base PS5's 0x300000000 and a PS5 Pro's
+// 0x34c000000; on a devkit, whose GPI switch says so, more counts as debug memory) and over a session writes nearly all
+// of it: its texture streamer keeps loading textures until ~400 MiB are left (texturePoolLowMemoryLimitMiBs +
+// texturePoolLowMemStopStreamingOffsetMiBs). Told the 12.5 GiB of before (13.5 less the 1 GiB flexible memory), the
+// half GiB more only became texture cache: Boletaria and four worlds (16 GB policy) ended 0.46 GB lower in the PC's
+// memory at 12 GiB, the streamer at 3.5 instead of 4.0 GiB; four of the heaviest maps toured clean, and 1-3 walked at
+// 62.0 fps against 58.2 back to back (58.3 at 12 GiB an hour before: the same within the runs' spread). (Told 11 GiB it
+// held 2.4-2.8 GiB and Boletaria's memory fell by 1.2 GiB; the crashes once put on it came from the kill tour, whose
+// suicide kills break the game's physics at any size.) KYTY_DIRECT_MEMORY_MB=<n>: n MiB (0: all of it, 12.5 GiB).
 static uint64_t ReportedDirectMemorySize() {
 	static const uint64_t cap = [] {
-		const char* value = std::getenv("KYTY_DIRECT_MEMORY_MB");
-		if (value == nullptr || *value == '\0') return ~uint64_t {0};
+		constexpr uint64_t Base = uint64_t {12} << 30u;
+		const char*        value = std::getenv("KYTY_DIRECT_MEMORY_MB");
+		if (value == nullptr || *value == '\0') return Libs::Graphics::DemonsSouls::IsSupportedGame() ? Base : ~uint64_t {0};
 		const uint64_t mib = std::strtoull(value, nullptr, 10);
 		if (mib == 0) return ~uint64_t {0};
 		std::printf("Direct memory: at most %llu MiB told to the game (KYTY_DIRECT_MEMORY_MB)\n",
