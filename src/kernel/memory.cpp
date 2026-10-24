@@ -3325,10 +3325,33 @@ int KYTY_SYSV_ABI KernelMunmap(uint64_t vaddr, size_t len) {
 	return result;
 }
 
+// KYTY_DIRECT_MEMORY_MB=<n> (a test): the game is told it has at most n MiB of direct memory (sceKernelGetDirectMemorySize;
+// sceKernelAvailableDirectMemorySize and sceKernelAllocateMainDirectMemory search below it). The engine takes all it is
+// told at start-up (PlatformPageAllocator::Init, eboot 0x80c200: a base PS5's 12 GiB, more pre-mapped as a devkit's
+// extra; we have 12.5) and over a session writes nearly all of it: its texture streamer keeps loading textures until
+// ~400 MiB are left (texturePoolLowMemoryLimitMiBs + texturePoolLowMemStopStreamingOffsetMiBs), and its page allocator
+// takes its never-used pages before those it freed. Told 11 GiB, the streamer held 2.4-2.8 GiB of textures at Boletaria
+// instead of 4.0 and the game's memory in RAM fell 8.73 -> 7.54 GiB (16 GB policy, Boletaria and four worlds), but the
+// game is not made for it: a tour of every map with its enemies killed crashed in 1-1 (job workers calling through an
+// object whose vtable was zero) and in 1-4 (a null read) within the first four maps. Not a default.
+static uint64_t ReportedDirectMemorySize() {
+	static const uint64_t cap = [] {
+		const char* value = std::getenv("KYTY_DIRECT_MEMORY_MB");
+		if (value == nullptr || *value == '\0') return ~uint64_t {0};
+		const uint64_t mib = std::strtoull(value, nullptr, 10);
+		if (mib == 0) return ~uint64_t {0};
+		std::printf("Direct memory: at most %llu MiB told to the game (KYTY_DIRECT_MEMORY_MB)\n",
+		            static_cast<unsigned long long>(mib));
+		std::fflush(stdout);
+		return mib << 20u;
+	}();
+	return std::min<uint64_t>(PhysicalMemory::Size(), cap);
+}
+
 size_t KYTY_SYSV_ABI KernelGetDirectMemorySize() {
 	PRINT_NAME();
 
-	return PhysicalMemory::Size();
+	return ReportedDirectMemorySize();
 }
 
 int KYTY_SYSV_ABI KernelAvailableDirectMemorySize(int64_t search_start, int64_t search_end,
@@ -3354,6 +3377,7 @@ int KYTY_SYSV_ABI KernelAvailableDirectMemorySize(int64_t search_start, int64_t 
 		return KERNEL_ERROR_EINVAL;
 	}
 
+	search_end = std::min<int64_t>(search_end, static_cast<int64_t>(ReportedDirectMemorySize()));
 	if (search_end <= search_start) {
 		LOGF_COLOR(Log::Color::Red, "\t[Fail]\n");
 		return NoMemory(__func__, __LINE__);
@@ -3535,7 +3559,7 @@ int KYTY_SYSV_ABI KernelAllocateMainDirectMemory(size_t len, size_t alignment, i
 	     "\t memory_type  = %d\n",
 	     len, alignment, memory_type);
 
-	return KernelAllocateDirectMemory(0, static_cast<int64_t>(PhysicalMemory::Size()), len,
+	return KernelAllocateDirectMemory(0, static_cast<int64_t>(ReportedDirectMemorySize()), len,
 	                                  alignment, memory_type, phys_addr_out);
 }
 
