@@ -39,15 +39,17 @@
  <label class="field"><span>Frame Generation</span><select id="framegen"><option value="0">Off</option><option value="2">2x</option><option value="3">3x</option><option value="4">4x</option><option value="5">5x</option><option value="6">6x</option></select></label>
  <label class="field"><span>FSR Frame Generation</span><select id="fsr"><option value="false">Off</option><option value="true">On</option></select></label>
  <label class="field"><span>Low Latency</span><select id="lowlatency"><option value="true">On</option><option value="false">Off</option></select></label>
+ <label class="field"><span title="Engine LOD selection and sunlight shadow distance (not GPU VRS)">Distance Detail</span><select id="distance-detail"><option value="original">Original (preserve Graphics Detail)</option><option value="balanced">Balanced (1080 / 200 m)</option><option value="performance">Performance (720 / 125 m)</option><option value="aggressive">Aggressive (480 / 60 m)</option></select></label>
  <label class="field"><span>FPS Overlay</span><select id="hud"><option value="0">Off</option><option value="1">FPS</option><option value="2">Detailed</option></select></label>
  <div class="field-divider"></div><p class="muted-info"><strong>Current profile</strong><br><span id="preset-summary"></span></p>
+ <p class="muted-info">Distance Detail only overrides engine LOD selection and sunlight shadow distance. Original preserves all existing settings; Graphics Detail still controls nearby ambient/spot shadows and texture quality. For nearby shadows choose Graphics Detail Standard. No automatic shader-cache rebuild.</p>
  <p class="muted-info">Presets set the actual internal render resolution and detail. Existing RAM16 and memory settings are never changed.</p>
 </div></div></section>
 <section id="tab-advanced" class="tab-panel" role="tabpanel"><div class="two-columns">
 <div class="field-col">
  <label class="field"><span>Memory Optimization</span><select id="ram-diet"><option value="true">On</option><option value="false">Off</option></select></label>
  <label class="field"><span>Extended Memory Mode</span><select id="ram16"><option value="true">On</option><option value="false">Off</option></select></label>
- <label class="field"><span>RAM Safety Mode (Stutter Guard)</span><select id="ram-safety"><option value="false">Off (not recommended)</option><option value="true">On (Stutter Guard + adaptive RAM protection)</option></select></label>
+ <label class="field"><span>RAM Safety Mode</span><select id="ram-safety"><option value="false">Off (standard memory policy)</option><option value="true">On (shader prefetch + adaptive RAM policy)</option></select></label>
  <label class="field"><span>GPU Selection (v15; blank = automatic)</span><input id="gpu-choice" type="text" maxlength="80" placeholder="Auto, or NVIDIA / Radeon / device number"></label>
  <label class="field"><span>GPU Cache Budget</span><select id="vram"><option value="0">Auto</option><option value="10240">10 GB</option><option value="8192">8 GB</option><option value="6144">6 GB</option><option value="4096">4 GB</option></select></label>
  <label class="field"><span>Compatibility Guard</span><select id="redzone"><option value="true">On</option><option value="false">Off</option></select></label>
@@ -61,7 +63,7 @@
  <div class="maintenance"><p>Maintenance</p><button id="shader-update">Update Missing Shaders</button><button id="shader-view-progress">View Progress…</button><button id="logs">Open Logs</button><button id="export-hints">Export Diagnostics</button></div>
  <div class="field-divider"></div>
  <div class="maintenance"><p>Steam integration</p><button id="steam-setup">Set Up Steam…</button><p id="steam-hint" class="muted-info">Play as a Non-Steam Game from Steam. The launcher exits with the game; Steamworks Rich Presence is unavailable.</p></div>
- <p class="muted-info">Stutter Guard and RAM16 are enabled by default. The latest chenxiao runtime chooses its memory guard mode automatically based on physical RAM. Failed Stage 7 and texture probing experiments have been removed.</p>
+ <p class="muted-info">RAM Safety limits background shader work under low RAM and uses adaptive guest backing and idle-texture retirement. Pipeline eviction follows independent RAM Diet and GPU VRAM policies; Stutter Guard has been removed. RAM16 is independent. Neither mode guarantees BSOD prevention.</p>
  <p class="muted-info">Manage old and current shader caches in the <strong>Shader Cache</strong> tab.</p>
 </div></div></section>
 <section id="tab-mods" class="tab-panel" role="tabpanel">

@@ -54,27 +54,8 @@ struct RetirePolicy {
     }
 }
 
-// Do not force release of driver handles: caller still requires a static-store
-// remake recipe, no pending optimized build, and the full Vulkan idle horizon.
-struct PipelinePolicy {
-    uint32_t idle_seconds;
-    uint32_t max_evictions_per_scan;
-    uint32_t remake_protection_seconds;
-};
-// Stage 4 Stutter Guard: the previous 90/120-second sweeps discarded thousands
-// of pipelines that gameplay soon needed again. Keep them longer, limit each
-// sweep, and do not re-evict a pipeline just remade on the render thread.
-// Critical pressure can still reclaim *cold* pipelines, without a mass sweep.
-[[nodiscard]] constexpr PipelinePolicy Pipelines(Level level, bool emergency = false) {
-    // Under 1 GiB truly available, avoid defending frame time at the cost of
-    // potential out-of-memory failure: release older candidates more quickly.
-    if (emergency) return {90, 128, 0};
-    switch (level) {
-    case Level::Critical: return {180, 64, 600};
-    case Level::Elevated: return {240, 32, 600};
-    default: return {300, 32, 600};
-    }
-}
+// Adaptive physical-RAM policy is limited to texture retirement and backing
+// hints. Driver-pipeline eviction follows its independent RAM Diet/VRAM policy.
 
 // Stage 5 texture residency diagnostic gating (and possible future lossless
 // duplicate reclamation): begin tracking cold texture copies when RAM is low.

@@ -36,6 +36,10 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 .tab-panel{display:none;height:100%}
 .tab-panel.active{display:block}
 .two-columns{height:100%;display:grid;grid-template-columns:1fr 1fr;padding:15px 12px 12px 12px}
+/* The Graphics tab has more controls than the original fixed-height dialog.
+   Keep its lower fields/notes reachable without changing other tabs. */
+#tab-graphics,#tab-advanced{overflow-y:auto}
+#tab-graphics .two-columns,#tab-advanced .two-columns{height:auto;min-height:100%}
 .field-col{padding:1px 17px 0 8px;min-width:0}
 .right-col{border-left:1px solid #ddd;padding-left:18px;padding-right:6px}
 .field{display:grid;grid-template-columns:150px minmax(0,1fr);gap:5px;align-items:center;min-height:34px;font-size:11px;white-space:nowrap}

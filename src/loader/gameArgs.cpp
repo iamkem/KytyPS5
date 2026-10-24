@@ -1,4 +1,5 @@
 #include "loader/gameArgs.h"
+#include "loader/distanceDetail.h"
 
 #include "common/emulatorConfig.h"
 #include "common/file.h"
@@ -49,6 +50,18 @@ const std::string& ExtraLines() {
 			if (Config::GetVblankFrequency() > 60) add("gameMinDeltaTime=0.004");
 		}
 		if (value != nullptr) add(value);
+		// Optional Demon's Souls-only distance detail. Apply *after* the normal
+		// launcher/Graphics Detail convars so only these two engine settings are
+		// overridden; keep nearby spot/ambient shadows and texture reduction as
+		// selected. This does not change shader compilation, Vulkan state or
+		// geometry culling. Missing/unknown values mean the original behavior.
+		if (Libs::Graphics::DemonsSouls::IsSupportedGame()) {
+			const char* distance = std::getenv("KYTY_DISTANCE_DETAIL");
+			if (distance != nullptr) {
+				const auto overlay = DistanceConvars(distance);
+				if (!overlay.empty()) add(std::string(overlay));
+			}
+		}
 		std::string out;
 		for (const auto& [name, entry]: entries) out += "+" + entry + "\n";
 		return out;

@@ -326,7 +326,14 @@ uint64_t GraphicContext::GetTotalMemoryBudget() const {
 	usage -= std::min(usage, simulation_ballast_bytes);
 	local -= std::min(local, simulation_ballast_bytes);
 	if (discrete) {
-		return budget - std::min<uint64_t>(budget / 8, 1024ull * 1024 * 1024);
+		const uint64_t result = budget - std::min<uint64_t>(budget / 8, 1024ull * 1024 * 1024);
+		// Preserve the main Windows checkout's opt-in VRAM cache-budget cap.
+		// This is not a hard VRAM limit. Off by default (0), same semantics.
+		static const uint64_t forced = [] {
+			const char* value = std::getenv("KYTY_VRAM_BUDGET_MB");
+			return value != nullptr ? std::strtoull(value, nullptr, 10) << 20u : uint64_t {0};
+		}();
+		return forced != 0 ? std::min(result, forced) : result;
 	}
 	constexpr uint64_t system_reserve = 8ull * 1024 * 1024 * 1024;
 	const auto         available      = budget > usage ? budget - usage : uint64_t {0};

@@ -6,7 +6,7 @@ const { spawn } = require('node:child_process');
 const defaults = Object.freeze({
   game: '', resolution: '2560x1440', fullscreen: false, aspect: true, language: 1,
   redzone: true, cheats: false, ecores: false, fps120: false, render: 1440,
-  ratio: '16:9', quality: 'standard', vsync: false, hdr: false, framegen: 0,
+  ratio: '16:9', quality: 'standard', distance_detail: 'original', vsync: false, hdr: false, framegen: 0,
   hud: 1, streamline: '', safegpu: false, upscaler: 'dlss', render_dlss: 1152,
   fsr: false, output: '4k', lowlatency: true, present_direct: false, antilag: false,
   fps30: false, dlss_model: 'auto', gpu: '',
@@ -34,6 +34,7 @@ function clean(candidate = {}) {
     } else if (typeof value === 'string' && value.length < 4096) result[key] = value;
   }
   if (!['standard','low','lowest'].includes(result.quality)) result.quality = 'standard';
+  if (!['original','balanced','performance','aggressive'].includes(result.distance_detail)) result.distance_detail = 'original';
   if (!['16:9','21:9','32:9'].includes(result.ratio)) result.ratio = '16:9';
   if (!['dlss','fsr',''].includes(result.upscaler)) result.upscaler = '';
   if (!['auto','K','E'].includes(result.dlss_model)) result.dlss_model = 'auto';
@@ -162,6 +163,10 @@ function buildPlayArgs(root, raw) {
   if (s.present_direct) vars.push('KYTY_PRESENT_DIRECT=1');
   if (s.antilag) vars.push('KYTY_ANTI_LAG=1');
   if (s.ram_diet) vars.push('KYTY_RAM_DIET=1');
+  // Always pass Original explicitly too: it clears a stale KYTY_DISTANCE_DETAIL
+  // inherited from Windows/the runner's JSON. Do not add a new PowerShell
+  // parameter: packaged launchers use the unchanged main run-windows.ps1.
+  vars.push('KYTY_DISTANCE_DETAIL='+s.distance_detail);
   // Use chenxiao's native PAGE_GUARD policy by physical RAM capacity (<=20 GiB).
   // Do not force KYTY_READ_GUARD=1 on machines with more than 20 GiB RAM.
   // The failed texture offload experiment is disabled, without destructive discard.

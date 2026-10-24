@@ -1040,10 +1040,13 @@ struct PipelineCache::ProgramCache {
 			if (n >= p.groups.size()) break;
 			(void)RunGroup(p, *p.groups[n]);
 			if (p.finished.fetch_add(1, std::memory_order_relaxed) + 1 == p.groups.size()) {
-				PipelineCacheLog("Shader prefetch: all {} programs translated, {} MiB of SPIR-V ({} MiB compressed)",
+				// Sequential slots are exhausted, but a FollowWork/PrefetchWork
+				// worker may still read inputs.records during PrefetchTranslate.
+				// Only the Prefetch destructor, after joining all workers, can
+				// safely release this input data. This is a progress snapshot.
+				PipelineCacheLog("Shader prefetch: all {} sequential slots visited, {} MiB of SPIR-V so far ({} MiB compressed)",
 				                 p.groups.size(), p.spirv_bytes.load(std::memory_order_relaxed) >> 20u,
 				                 p.spill_end.load(std::memory_order_relaxed) >> 20u);
-				std::vector<std::vector<uint32_t>>().swap(p.inputs.records); // no longer read
 				const auto mib = [&](PrefetchMemoryPart part) { return p.memory[part].load(std::memory_order_relaxed) >> 20u; };
 				PipelineCacheLog("Shader prefetch memory (MiB): plan values {} memory infos {} other {} info {}, modules info {} "
 				                 "table plans {} read plans {} bindings {} specializations {}, groups {}",
@@ -1061,7 +1064,7 @@ struct PipelineCache::ProgramCache {
 	// none of the programs play has not met (they are for later): its translations, SPIR-V and plan file add to the paging
 	// the PC is doing then, the game loading beside it on 16 GB (issue #50: a bug check 0x1A in a protection change of the
 	// game's memory, while a level loaded with the prefetch translating 20,000 programs). True when one play met came up.
-	static bool WaitForMemory(Prefetch& p) {
+	bool WaitForMemory(Prefetch& p) {
 		static const uint64_t minimum = [] {
 			const char* value = std::getenv("KYTY_PREFETCH_MIN_AVAIL_MB");
 			return (value != nullptr && *value != '\0' ? std::strtoull(value, nullptr, 10) : uint64_t {1024}) << 20u;
@@ -1075,7 +1078,15 @@ struct PipelineCache::ProgramCache {
 				PipelineCacheLog("Shader prefetch: waits, {} MiB of physical memory left (below {} MiB)", available >> 20u,
 				                 minimum >> 20u);
 			waited = true;
-			if (p.Followed() != nullptr) return true;
+			// Followed() consumes a priority-window cursor. Never call it as a
+			// mere predicate: that silently skips the selected shader, leaving
+			// a first-use translation for the render thread. Process it here,
+			// just as PrefetchWork does above; no extra worker, unchanged
+			// existing low-RAM exception for shaders that play has requested.
+			if (auto* group = p.Followed()) {
+				if (RunGroup(p, *group)) p.followed.fetch_add(1, std::memory_order_relaxed);
+				return true;
+			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(250));
 		}
 		return false;
@@ -2280,8 +2291,7 @@ const EvictSettings& PipelineEvictSettings() {
 		out.set               = evict != nullptr && *evict != '\0';
 		out.on                = !out.set || std::string_view(evict) != "0";
 		out.always            = out.set && std::string_view(evict) == "2";
-		if ((RamDietEnabled() || MemoryPressure::Enabled()) &&
-		    !(evict != nullptr && std::string_view(evict) == "0")) {
+		if (RamDietEnabled() && !(evict != nullptr && std::string_view(evict) == "0")) {
 			out.set = true;
 			out.on  = true;
 		}
@@ -2347,7 +2357,6 @@ vk::Pipeline BindPipelineHandle(const PipelineCache::Pipeline& pipeline) {
 	EXIT_IF(made.pipeline == nullptr || made.pipeline_layout != pipeline.pipeline_layout ||
 	        made.descriptor_set_layout != pipeline.descriptor_set_layout);
 	const_cast<PipelineCache::Pipeline&>(pipeline).pipeline = made.pipeline;
-	if (MemoryPressure::Enabled()) pipeline.last_remade_at = std::chrono::steady_clock::now();
 	const auto us = static_cast<uint64_t>(
 	    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
 	g_pipeline_evictions.remade.fetch_add(1, std::memory_order_relaxed);
@@ -2389,45 +2398,18 @@ void PipelineCache::EvictIdlePipelines() {
 		m_scene_swept      = false;
 	}
 	if (!settings.on || flip % CheckFlips != 0) return;
-	// Sample physical RAM only on the existing periodic pipeline sweep. 1 GiB hysteresis
-	// avoids alternating driver pipeline destruction/recreation near the threshold.
-	static MemoryPressure::Level adaptive_pressure = MemoryPressure::Level::Normal;
-	uint64_t available_ram = 0;
-	if (MemoryPressure::Enabled()) {
-		const auto available = LocalPlatform::AvailablePhysicalMemory();
-		available_ram = available;
-		const auto total     = LocalPlatform::PhysicalMemory();
-		const auto next      = MemoryPressure::Next(adaptive_pressure, available, total);
-		if (next != adaptive_pressure) {
-			std::printf("Adaptive pipelines: %s -> %s (available %llu MiB)\n",
-			            MemoryPressure::Name(adaptive_pressure), MemoryPressure::Name(next),
-			            static_cast<unsigned long long>(available >> 20u));
-			std::fflush(stdout);
-		}
-		adaptive_pressure = next;
-	}
-	const bool ram_pressure = MemoryPressure::Enabled() && adaptive_pressure != MemoryPressure::Level::Normal;
-	const bool emergency = MemoryPressure::Enabled() && available_ram > 0 && available_ram < MemoryPressure::GiB;
-	const auto adaptive_policy = MemoryPressure::Pipelines(adaptive_pressure, emergency);
-	// Stutter Guard: when Adaptive RAM is on, use a longer idle horizon and
-	// smaller eviction batches even in the normal tier. Guest memory and texture
-	// pressure policies remain unchanged. Respect longer user-configured horizons.
-	const auto idle_horizon = emergency
-	    ? std::chrono::duration_cast<std::chrono::nanoseconds>(
-	          std::chrono::seconds(adaptive_policy.idle_seconds))
-	    : MemoryPressure::Enabled()
-	      ? std::max(settings.idle, std::chrono::duration_cast<std::chrono::nanoseconds>(
-	                                   std::chrono::seconds(adaptive_policy.idle_seconds)))
-	      : settings.idle;
-	const size_t max_evictions = MemoryPressure::Enabled()
-	    ? adaptive_policy.max_evictions_per_scan : MaxEvictions;
-	// Scene-only sweeps after a 60s world transition caused a large rebuild wave
-	// when revisiting an area. Adaptive mode retires by measured idle age instead.
+	// RAM Safety no longer tunes pipeline eviction age, batch size, remake
+	// cooldown or memory-pressure triggers. Keep the independent RAM Diet/VRAM
+	// policy and preserve scene-sweep suppression below as an anti-regression gate.
+	const auto idle_horizon = settings.idle;
+	const size_t max_evictions = MaxEvictions;
+	// Preserve the old RAM Safety scene-sweep suppression: restoring these
+	// mass evictions would recreate the stutter regression seen before Stage 4.
 	const bool scene_left = !MemoryPressure::Enabled() && !m_scene_swept &&
 	                        now - m_scene_since >= SceneSettle;
 	uint64_t video = 0, budget = 0;
 	const bool known = m_graphics.QueryLocalVideoMemory(&video, &budget);
-	m_evict_pressure = (known && (settings.always || video + EvictMargin >= budget)) || RamDietEnabled() || ram_pressure;
+	m_evict_pressure = (known && (settings.always || video + EvictMargin >= budget)) || RamDietEnabled();
 	if (RamDietEnabled()) {
 		// Replaced unoptimized pipelines past RamDietReplacedSeconds (pushed in time order).
 		const auto old = (now - std::chrono::seconds(RamDietReplacedSeconds)).time_since_epoch().count();
@@ -2466,9 +2448,6 @@ void PipelineCache::EvictIdlePipelines() {
 		if (evicted == max_evictions || pipeline.pipeline == nullptr || pipeline.remake == nullptr || pipeline.unoptimized ||
 		    pipeline.optimized != nullptr)
 			return;
-		if (MemoryPressure::Enabled() && pipeline.last_remade_at != std::chrono::steady_clock::time_point {} &&
-		    now - pipeline.last_remade_at < std::chrono::seconds(adaptive_policy.remake_protection_seconds))
-			return;
 		const bool idle  = pipeline.last_flip < below;
 		const bool other = scene_left && pipeline.last_flip < m_scene_flip && !scene_recipes.contains(pipeline.recipe);
 		if (!idle && !other) return;
@@ -2479,8 +2458,18 @@ void PipelineCache::EvictIdlePipelines() {
 		left += idle ? 0 : 1;
 		if (RamDietEnabled()) g_ram_diet_evicted.fetch_add(1, std::memory_order_relaxed);
 	};
-	for (auto& [key, pipeline]: m_graphics_pipelines) evict(*pipeline);
-	for (auto& [id, pipeline]: m_compute_pipelines) evict(*pipeline);
+	// Once the eviction quota is met, the remaining map walk cannot release anything.
+	// Stop here instead of scanning thousands of entries under the pipeline-cache lock.
+	for (auto& [key, pipeline]: m_graphics_pipelines) {
+		if (evicted == max_evictions) break;
+		evict(*pipeline);
+	}
+	if (evicted < max_evictions) {
+		for (auto& [id, pipeline]: m_compute_pipelines) {
+			if (evicted == max_evictions) break;
+			evict(*pipeline);
+		}
+	}
 	if (scene_left && evicted < max_evictions) m_scene_swept = true;
 	g_pipeline_evictions.scene.fetch_add(left, std::memory_order_relaxed);
 	if (scene_left && m_scene_swept) {
