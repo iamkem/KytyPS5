@@ -488,10 +488,11 @@ private:
 	// (EvictIdlePipelines) When each recent flip began (steady clock, by flip % size), and the video memory pressure.
 	std::array<int64_t, 32768> m_flip_times {};
 	bool                      m_evict_pressure = false;
-	// (EvictIdlePipelines) The world the game is in: its SceneTags generation, the flip and time it began, and whether
-	// the pipelines of the worlds before it went.
+	// (EvictIdlePipelines) The world the game is in: its SceneTags generation, the flip it began,
+	// the previous world's first flip, and whether older worlds' pipelines were swept.
 	uint64_t                              m_scene_generation = 0;
 	uint32_t                              m_scene_flip       = 0;
+	uint32_t                              m_prev_scene_flip  = 0;
 	std::chrono::steady_clock::time_point m_scene_since {};
 	bool                                  m_scene_swept = true;
 	void InitializeDriverCache();
