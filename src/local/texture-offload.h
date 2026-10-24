@@ -67,17 +67,16 @@ namespace TextureOffload {
 
 enum class Mode { Off, Probe, Offload };
 
-// KYTY_TEXTURE_OFFLOAD=1|0 (default: on with 20 GiB of RAM or less, where the game's memory and the emulator's caches
-// press on it; with more, its restores' stalls buy nothing).
+// KYTY_TEXTURE_OFFLOAD=1|0 (off by default: upstream issue #5/#157/#159 black textures
+// and long restore waits on low-RAM PCs; opt-in only, additionally blocked with sparse file backing).
 inline Mode GetMode() {
 #if KYTY_TEXTURE_OFFLOAD_SUPPORTED
 	static const Mode mode = [] {
 		const char* offload = std::getenv("KYTY_TEXTURE_OFFLOAD");
 		const char* probe = std::getenv("KYTY_TEXTURE_OFFLOAD_PROBE");
-		const bool requested = offload != nullptr && offload[0] != '\0';
-		const bool wants_offload = requested
-		    ? offload[0] == '1'
-		    : (LocalPlatform::PhysicalMemory() != 0 && LocalPlatform::PhysicalMemory() <= (uint64_t {20} << 30u));
+		// No implicit RAM-based enable: upstream v20261025 disabled the feature
+		// after reproducible black textures and stalls. File-backed guard stays.
+		const bool wants_offload = offload != nullptr && offload[0] == '1';
 		if (wants_offload) {
 			// Stage 5 gate: Windows DiscardVirtualMemory returned ERROR_USER_MAPPED_FILE
 			// (1224) against our sparse file-backed section; the test's mapped bytes
