@@ -2430,6 +2430,25 @@ void PipelineCache::EvictIdlePipelines() {
 		}
 		RamDietReport();
 	}
+	// Upstream issue #85: if idle-evicted pipelines repeatedly have to be remade,
+	// keep them for this session instead of repeatedly stalling gameplay. Respect
+	// KYTY_PIPELINE_EVICT=2's deliberate stress-test mode, without altering RAM
+	// Safety's independent scene-sweep suppression or RAM Diet cleanup above.
+	constexpr uint64_t MinIdleSample = 512;
+	if (m_evict_pressure && !settings.always && !m_idle_evict_off) {
+		const auto idle_evicted = g_pipeline_evictions.evicted.load(std::memory_order_relaxed) -
+		                          g_pipeline_evictions.scene.load(std::memory_order_relaxed);
+		const auto remade = g_pipeline_evictions.remade.load(std::memory_order_relaxed);
+		if (idle_evicted >= MinIdleSample && remade * 4 >= idle_evicted) {
+			m_idle_evict_off = true;
+			std::printf("Pipelines out of video memory while idle: %llu of the %llu evicted made again (%.0f ms): "
+			            "no more idle evictions this session\n",
+			            static_cast<unsigned long long>(remade), static_cast<unsigned long long>(idle_evicted),
+			            static_cast<double>(g_pipeline_evictions.remake_us.load(std::memory_order_relaxed)) / 1000.0);
+			std::fflush(stdout);
+		}
+	}
+	if (m_idle_evict_off) m_evict_pressure = false;
 	if (!m_evict_pressure && !scene_left) return;
 	// The newest flip that began by the horizon among those the ring holds; none when even the oldest began after it.
 	uint32_t below = 0; // bound in an earlier flip: idle since then
