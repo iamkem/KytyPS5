@@ -6,7 +6,7 @@ const { spawn } = require('node:child_process');
 const defaults = Object.freeze({
   game: '', resolution: '2560x1440', fullscreen: false, aspect: true, language: 1,
   redzone: true, cheats: false, ecores: false, fps120: false, render: 1440,
-  ratio: '16:9', quality: 'standard', distance_detail: 'original', distance_tessellation: 'original', vsync: false, hdr: false, framegen: 0,
+  ratio: '16:9', quality: 'standard', distance_detail: 'original', distance_tessellation: 'original', ssr_test: 'original', vsync: false, hdr: false, framegen: 0,
   hud: 1, streamline: '', safegpu: false, upscaler: 'dlss', render_dlss: 1152,
   fsr: false, output: '4k', lowlatency: true, present_direct: false, antilag: false,
   fps30: false, dlss_model: 'auto', gpu: '',
@@ -36,6 +36,7 @@ function clean(candidate = {}) {
   if (!['standard','low','lowest'].includes(result.quality)) result.quality = 'standard';
   if (!['original','balanced','performance','aggressive'].includes(result.distance_detail)) result.distance_detail = 'original';
   if (!['original','early'].includes(result.distance_tessellation)) result.distance_tessellation = 'original';
+  if (!['original','iterations64'].includes(result.ssr_test)) result.ssr_test = 'original';
   if (!['16:9','21:9','32:9'].includes(result.ratio)) result.ratio = '16:9';
   if (!['dlss','fsr',''].includes(result.upscaler)) result.upscaler = '';
   if (!['auto','K','E'].includes(result.dlss_model)) result.dlss_model = 'auto';
@@ -171,6 +172,8 @@ function buildPlayArgs(root, raw) {
   // Disabled explicitly by default; opt-in source-profile experiment only.
   // Native additionally restricts this to PPSA01341 v1.07 with an exact source line.
   vars.push('KYTY_DISTANCE_TESSELLATION='+s.distance_tessellation);
+  // Safe A/B toggle. The runner appends SSR convars after -Quality and enforces v1.07.
+  vars.push('KYTY_SSR_TEST='+(s.ssr_test === 'iterations64' ? 'ssr64' : 'off'));
   // Use chenxiao's native PAGE_GUARD policy by physical RAM capacity (<=20 GiB).
   // Do not force KYTY_READ_GUARD=1 on machines with more than 20 GiB RAM.
   // The failed texture offload experiment is disabled, without destructive discard.

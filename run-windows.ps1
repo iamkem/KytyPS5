@@ -329,6 +329,12 @@ foreach ($pair in ($Set | ForEach-Object { $_ -split ',(?=[A-Za-z_][A-Za-z0-9_]*
 	elseif ($environment.Contains($key)) { $environment.Remove($key); Remove-Item "env:$key" -ErrorAction SilentlyContinue }
 	else { $environment[$key] = '0' }
 }
+# Optional SSR A/B probe: only for verified v1.07, append after -Quality and explicit settings.
+# Never overwrite the whole convar list or override the user's global KYTY_GAME_CONVARS=0 opt-out.
+if ($environment['KYTY_SSR_TEST'] -eq 'ssr64' -and $titleId -eq 'PPSA01341' -and $version -eq 'PPSA01341 01.007.000' -and
+    "$($environment['KYTY_GAME_CONVARS'])" -ne '0') {
+	$environment['KYTY_GAME_CONVARS'] = (@($environment['KYTY_GAME_CONVARS'], 'r_ssrEnableOverrides=true;r_ssrMaxIterations=64') | Where-Object { $_ }) -join ';'
+}
 # Above 60 Hz (-Fps120, -Vblank; after -Set, whose engine settings get it too): Demon's Souls steps its game by at
 # least a frame of its target rate each frame (gameMinDeltaTime below 0, its default: 1/60 s, the cinematic mode's
 # 1/30), so frames past that rate played the game that much faster (issue #22: Stonefang 2-3 at 74 fps walked 4.52 m/s,
