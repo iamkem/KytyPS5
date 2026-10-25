@@ -14,7 +14,13 @@ For the 12 logs from 2026-10-25 08:30:31–09:32:45, the tool counted **132** th
 
 For game-side A/B measurement on RTX 5070, keep DLSS internal render/output, area/save/camera, ambient and spot shadows, FOV, RAM Safety/Diet and Distance Tessellation fixed. Compare **Original → PS4 Base → Original** with a game restart between modes and allow shader warmup before collecting **60–120 seconds of frame times** from external capture (e.g. CapFrameX/PresentMon) and side-by-side screenshots. Additional emulator HUD Detailed (F8) shows GPU load and render-thread busy but not per-pass GPU time. Only a repeatable improvement with correct game geometry qualifies for promotion.
 
-## P1 — Density: one specifically admissible opt-in research probe
+## P1 — Density: retired NO-GO after user runtime A/B
+
+**Verdict 2026-10-25:** User ran Original PS5 Perf Density **8.0** at 10:42:05 (`_Build/run-logs/20261025-104205-021.out.log`) and PS4 Base Density **7.0** at 10:43:51 (`_Build/run-logs/20261025-104351-349.out.log`). The second log confirms the virtual profile emitted 7.0 twice. The user observed **FPS essentially unchanged**; this is insufficient to claim a statistically proven zero change, but it does **not meet promotion criteria**. Do not escalate to density 5 or reintroduce a more aggressive geometry-quality toggle without new workload evidence. The second run had a compile-heavy slow frame (754.2 ms), so neither session's thresholded slow-frame count is a valid FPS comparison. No formal full-frame FPS/1% low, GPU busy or image-equivalence data exists.
+
+**Retirement:** Removed `KYTY_GRAPHICS_AUDIT_DENSITY` from both the native virtual file-redirect path and launcher. The previous saved `graphics_audit_density` key is ignored by launcher clean/save and never passed to the game; a native tombstone `graphicsAuditDensity.h` always returns an empty value. No default PS5 Performance profile or game asset was changed. Distance Tessellation Early Fade remains independently available. The following description is retained **only as historical experiment evidence, not active functionality**.
+
+### Original opt-in probe (historical, removed)
 
 The installed PS5 Performance profile ships `+r_tessellationDensity=8.0`; the installed PS4 Base profile ships `+r_tessellationDensity=7.0`. PS4 Neo is 5; PS5 Trinity 13 and PS5 High 18. These numbers are **profile values, not FPS or geometry equality guarantees**.
 
@@ -24,11 +30,11 @@ The new launcher setting **Geometry Density (Experimental)** is `Original (PS5 P
 
 ## P2 — Particle effects: static evidence, runtime gate NOT GRANTED
 
-`debugrendermenudynamic.txt` exposes `particleResolution`, `particleLowResBudgetFactor`, `particleDistortionResolution`, `particleDistortionBudgetFactor`, `particleRibbonTessDensity`, `particleEnableAsyncCompute`, `particleNumShadowCascades`. The eboot binary contains matching strings. **None of the target setting's default values, enum values for resolution, unit semantics or per-pass GPU costs have been validated for v1.07**. In particular, do not force `particleResolution=0` or guess budget multipliers. First obtain the convar registration metadata/defaults or a read-only game diagnostic before opening a launcher mode. No particle override is injected by this phase.
+`debugrendermenudynamic.txt` exposes `particleResolution`, `particleLowResBudgetFactor`, `particleDistortionResolution`, `particleDistortionBudgetFactor`, `particleRibbonTessDensity`, `particleEnableAsyncCompute`, `particleNumShadowCascades`. The installed eboot binary contains matching strings: `particleResolution` at file offset `0x024B9175`, `particleDistortionResolution` at `0x024D5A8E`, `particleLowResBudgetFactor` at `0x02489501` and `particleDistortionBudgetFactor` at `0x024A5D2D` (verified by LLVM `strings -t x`, **string locations only, not code or defaults**). None of the seven inspected PS4/PS5 `misc/renderconfig*` profiles provides the candidate particle settings. **None of the target setting's default values, enum values for resolution, unit semantics or per-pass GPU costs have been validated for v1.07**. In particular, do not force `particleResolution=0` or guess budget multipliers. First obtain the convar registration metadata/defaults or a read-only game diagnostic before opening a launcher mode. No particle override is injected by this phase.
 
 ## P3 — SSR and contact shadows: static evidence, runtime gate NOT GRANTED
 
-`debugrendermenuibl.txt` lists `r_ssrEnableOverrides`, `r_ssrMaxIterations`, `r_ssrMaxRayLength`, `r_ssrCutoffDistance` and `r_ssrMethod`. `debugrendermenulighting.txt` lists `r_contactShadowsEnabled`; the eboot contains those strings. **Neither the effective default SSR settings nor whether contact shadows are active under Graphics Lowest (which already disables ambient and spot shadows) is known**. Avoid guessing an iteration count, toggling reflection shaders in a baseline build, or falsely claiming shadow pass savings. A separate static disassembly or equivalent convar-default evidence plus a per-pass workload measurement is required before exposing an SSR/Contact probe. No SSR/Contact override is injected by this phase.
+`debugrendermenuibl.txt` lists `r_ssrEnableOverrides`, `r_ssrMaxIterations`, `r_ssrMaxRayLength`, `r_ssrCutoffDistance` and `r_ssrMethod`. `debugrendermenulighting.txt` lists `r_contactShadowsEnabled`. Verified v1.07 eboot string locations: `r_ssrEnableOverrides` `0x024A5CF0`, `r_ssrMaxIterations` `0x0241798B`, `r_ssrMaxRayLength` `0x024DF27B`, `r_ssrCutoffDistance` `0x02433D46`, `r_contactShadowsEnabled` `0x024B9129`. These are byte offsets of names, NOT numerical parameter values. All inspected shipped profiles set `r_iblResolution` (PS5 Perf and LowEnergy use `HalfResX`, Trinity and High use `Full`); none explicitly sets these SSR/contact settings. **Neither the effective default SSR settings nor whether contact shadows are active under Graphics Lowest (which already disables ambient and spot shadows) is known**. Avoid guessing an iteration count, toggling reflection shaders in a baseline build, or falsely claiming shadow pass savings. A separate static disassembly or equivalent convar-default evidence plus a per-pass workload measurement is required before exposing an SSR/Contact probe. No SSR/Contact override is injected by this phase.
 
 ## Additional prior evidence and retirements
 
@@ -40,7 +46,7 @@ The new launcher setting **Geometry Density (Experimental)** is `Original (PS5 P
 
 ## Validation contract
 
-- `tools/local/graphics-audit-density-policy-test.cpp`: C++20 constexpr source-profile tests for exact 8.0 -> 7.0 conversion, composition with Early Fade, CRLF, unsupported/duplicate/mismatched inputs.
-- `launcher-electron/tests/graphics-audit-density.test.cjs`: launcher persistence, strict enum, -Set propagation, independence from RAM/DLSS/Early Fade, no shader precompile, native audit gates.
+- `tools/local/graphics-audit-density-policy-test.cpp`: C++20 compile-time retirement assertions: all density modes now produce no override.
+- `launcher-electron/tests/graphics-audit-density.test.cjs`: regression contract proving old saved Density 7 cannot activate a native override, while Early Fade/RAM and normal game startup behavior remain unaffected.
 - `launcher-electron/tests/graphics-audit-baseline.test.cjs`: log parser does not invent FPS/1% low; ignores shader-precompile files.
 - Native build with configured NVIDIA Streamline, complete launcher test suite, Electron package inspection and verified origin branch required before handoff. Game and precompile deliberately NOT executed.

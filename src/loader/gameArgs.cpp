@@ -1,7 +1,6 @@
 #include "loader/gameArgs.h"
 #include "loader/distanceDetail.h"
 #include "loader/distanceTessellation.h"
-#include "loader/graphicsAuditDensity.h"
 #include "loader/systemContent.h"
 
 #include "common/emulatorConfig.h"
@@ -89,23 +88,6 @@ bool TessellationRequested() {
     return active;
 }
 
-// Separate opt-in geometry-density probe; never silently modify the shipped
-// PS5 Performance profile. Source baseline and installed version must match.
-bool GraphicsAuditDensityRequested() {
-    static const bool active = [] {
-        const char* mode = std::getenv("KYTY_GRAPHICS_AUDIT_DENSITY");
-        if (mode == nullptr || GraphicsAuditDensity::Value(mode).empty()) return false;
-        const char* convars = std::getenv("KYTY_GAME_CONVARS");
-        if (convars != nullptr && std::string_view(convars) == "0") return false;
-        std::string title, version;
-        return Libs::Graphics::DemonsSouls::IsSupportedGame() &&
-               Loader::SystemContentParamSfoGetString("TITLE_ID", &title) &&
-               Loader::SystemContentParamSfoGetString("APP_VER", &version) &&
-               GraphicsAuditDensity::BuildAdmitted(title, version);
-    }();
-    return active;
-}
-
 enum class Kind { None, Args, PerfConfig };
 
 // The engine opens them as "$/packagecmdlineargs.txt" and "$/misc/renderconfig_ps5_perf.txt" (lower case): the
@@ -114,7 +96,7 @@ Kind KindOf(const std::filesystem::path& real) {
 	auto name = real.filename().string();
 	for (auto& c: name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 	if (name == "packagecmdlineargs.txt" && !ExtraLines().empty()) return Kind::Args;
-	if (name == "renderconfig_ps5_perf.txt" && (DemonsSoulsSuperResolution::Active() || TessellationRequested() || GraphicsAuditDensityRequested()))
+	if (name == "renderconfig_ps5_perf.txt" && (DemonsSoulsSuperResolution::Active() || TessellationRequested()))
         return Kind::PerfConfig;
 	return Kind::None;
 }
@@ -155,11 +137,6 @@ std::string Contents(const std::filesystem::path& real, Kind kind) {
 	if (TessellationRequested()) {
 		if (auto adjusted = DistanceTessellation::RewritePerfConfig(out, "early")) out = std::move(*adjusted);
 	}
-	// Independent opt-in PS4 Base density probe: no other Perf profile
-	// value, display mode, displacement, recursion or draw call changes.
-	if (GraphicsAuditDensityRequested()) {
-		if (auto adjusted = GraphicsAuditDensity::RewritePerfConfig(out, "ps4base")) out = std::move(*adjusted);
-	}
 	return out;
 }
 
@@ -185,8 +162,6 @@ std::filesystem::path RedirectRead(const std::filesystem::path& real) {
 	} else {
 		const bool experiment_applied = TessellationRequested() &&
                                        text.find("+r_tessellationFadeOutStart=10.0") != std::string::npos;
-        const bool density_applied = GraphicsAuditDensityRequested() &&
-                                     text.find("+r_tessellationDensity=7.0") != std::string::npos;
         if (DemonsSoulsSuperResolution::Active())
             std::printf("Game args: %s read with r_Wants4K = WantsTrinity%s\n", real.string().c_str(),
                         experiment_applied ? "; tessellation fade start 10.0 (experimental)" : "");
@@ -195,10 +170,6 @@ std::filesystem::path RedirectRead(const std::filesystem::path& real) {
                         experiment_applied ? "start 10.0 (experimental)" : "unchanged");
         if (TessellationRequested() && !experiment_applied)
             std::printf("Distance tessellation: exact v1.07 perf baseline not found; override skipped\n");
-        if (density_applied)
-            std::printf("Graphics audit: tessellation density 8.0 -> 7.0 (experimental; effect unverified)\n");
-        else if (GraphicsAuditDensityRequested())
-            std::printf("Graphics audit: density baseline does not match v1.07; override skipped\n");
 	}
 	std::fflush(stdout);
 	return copy;

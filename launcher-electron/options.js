@@ -14,7 +14,7 @@ const sizes={'16:9':['1280x720','1920x1080','2560x1440','3840x2160'],
 const boolKeys={'vsync':'vsync','fps120':'fps120','lowlatency':'lowlatency',
  'fsr':'fsr','fps30':'fps30','ram-diet':'ram_diet','ram16':'ram16_backing','ram-safety':'ram_safety','redzone':'redzone','safegpu':'safegpu'};
 const numberKeys={'framegen':'framegen','hud':'hud','vram':'vram_budget_mb','language':'language'};
-const plainKeys={'ratio':'ratio','resolution':'resolution','upscaler':'upscaler','dlss-model':'dlss_model','gpu-choice':'gpu','output':'output','quality':'quality','distance-detail':'distance_detail','distance-tessellation':'distance_tessellation','graphics-audit-density':'graphics_audit_density'};
+const plainKeys={'ratio':'ratio','resolution':'resolution','upscaler':'upscaler','dlss-model':'dlss_model','gpu-choice':'gpu','output':'output','quality':'quality','distance-detail':'distance_detail','distance-tessellation':'distance_tessellation'};
 function set(id,value){const el=$(id);if(el.type==='checkbox')el.checked=Boolean(value);else el.value=String(value);}
 function showMessage(t){$('message').textContent=t;}
 function activePreset(s=state){return Object.entries(presets).find(([,p])=>Object.keys(p).every(k=>s[k]===p[k]))?.[0]||'Custom';}
@@ -37,7 +37,7 @@ function fill(){
   set('render-height',s.upscaler==='dlss'||s.upscaler==='fsr'?s.render_dlss:s.render);
   set('game-path',s.game);set('sdk-path',s.streamline);
   set('preset',activePreset(s));
-  $('preset-summary').textContent=activePreset(s)+' · '+(s.upscaler==='dlss'?'DLSS':s.upscaler==='fsr'?'FSR 3':'Game TAA')+' '+(s.upscaler==='dlss'||s.upscaler==='fsr'?s.render_dlss:s.render)+'p · '+(s.quality==='standard'?'Standard (PS5)':s.quality)+' · Distance '+s.distance_detail+' · Tessellation '+s.distance_tessellation+' · Density '+s.graphics_audit_density;
+  $('preset-summary').textContent=activePreset(s)+' · '+(s.upscaler==='dlss'?'DLSS':s.upscaler==='fsr'?'FSR 3':'Game TAA')+' '+(s.upscaler==='dlss'||s.upscaler==='fsr'?s.render_dlss:s.render)+'p · '+(s.quality==='standard'?'Standard (PS5)':s.quality)+' · Distance '+s.distance_detail+' · Tessellation '+s.distance_tessellation;
   $('output').disabled=false; // chenxiao07: optional native 1080p game output supports DLSS too.
  }finally{syncing=false;}
 }
