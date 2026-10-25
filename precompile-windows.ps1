@@ -79,10 +79,47 @@ param(
 	# my-hints-<title>_<version>.hints next to this script, nothing compiled: attached to an issue, the next releases'
 	# hints hold them (places and effects the test PC never recorded: a boss's death compiled ~75 s on an AMD GPU).
 	[switch]$ExportHints,
-	[string]$Exe = $(if (Test-Path "$PSScriptRoot\kyty_shader_precompile.exe") { "$PSScriptRoot\kyty_shader_precompile.exe" } else { "$PSScriptRoot\_Build\windows\kyty_shader_precompile.exe" })
+	[string]$Exe = $(if (Test-Path "$PSScriptRoot\kyty_shader_precompile.exe") { "$PSScriptRoot\kyty_shader_precompile.exe" } else { "$PSScriptRoot\_Build\windows\kyty_shader_precompile.exe" }),
+	# Explicit, separate experiment. Never combine with production incremental/cache maintenance.
+	[switch]$ShaderFeatureTrial,
+	# File-system-only preflight: does not run a Vulkan program or write any cache.
+	[switch]$TrialCheck
 )
 $ErrorActionPreference = 'Stop'
+if ($TrialCheck -and !$ShaderFeatureTrial) { throw '-TrialCheck requires -ShaderFeatureTrial' }
+if ($ShaderFeatureTrial) {
+	if ($env:KYTY_SHADER_FEATURE_TRIAL -and $env:KYTY_SHADER_FEATURE_TRIAL -ne '1') { throw 'Conflicting trial environment' }
+	if ($Incremental -or $Quick -or $InputsOnly -or $Coverage -or $ReplaceCache -or
+	    $ExportHints -or $RefreshSeeds -or $ForceResume -or !$Full) {
+		throw 'Shader feature trial requires -Full and refuses incremental, quick, maintenance and seed-generation modes'
+	}
+	if (!$Seeds -or !(Test-Path -LiteralPath $Seeds -PathType Leaf)) {
+		throw 'Shader feature trial requires -Seeds pointing to an existing, read-only seed file'
+	}
+	if (!$Game -or !(Test-Path -LiteralPath $Game)) {
+		throw 'Shader feature trial requires explicit -Game; never changes game-path.txt'
+	}
+	foreach ($key in @('KYTY_LANE_LOCAL_COOP', 'KYTY_TABLE_SLOTS_AT_USE', 'KYTY_NATIVE_FLOAT_MIN_MAX', 'KYTY_SHADER_WARMUP_FILE')) {
+		if (Test-Path "env:$key") { throw "Shader feature trial refuses inherited $key override" }
+	}
+	$cacheRoot = Join-Path $PSScriptRoot '_Build\shader-feature-trial\_PipelineCache'
+	if ($TrialCheck) {
+		Write-Host "SHADER FEATURE TRIAL ONLY: cache root $cacheRoot, seeds $Seeds, game $Game"
+		Write-Host 'No files or environment changed; native cache store and runner not invoked.'
+		return
+	}
+	$env:KYTY_SHADER_FEATURE_TRIAL = '1'
+} else {
+	if ($env:KYTY_SHADER_FEATURE_TRIAL -eq '1') { throw 'Use -ShaderFeatureTrial explicitly; production script may not operate on trial caches' }
+	$cacheRoot = Join-Path $PSScriptRoot '_PipelineCache'
+}
 if (!(Test-Path $Exe)) { throw "missing $Exe; build it with build-windows.cmd kyty_shader_precompile" }
+if ($ShaderFeatureTrial) {
+	$capability = @(& $Exe --shader-feature-trial-capabilities 2>&1) -join "`n"
+	if ($LASTEXITCODE -ne 0 -or $capability -notmatch 'KytyShaderFeatureTrial1 cache=_Build/shader-feature-trial/_PipelineCache features=3') {
+		throw "Trial-capable native precompiler required; refusing to touch any cache with this executable"
+	}
+}
 if ($Gpu) { $env:KYTY_GPU = $Gpu }
 # The AMD driver keys its pipelines (VK_KHR_pipeline_binary keys, its pipeline cache) by the executable's name: what
 # kyty_shader_precompile.exe compiled, kyty_emulator.exe never found (10-16, RX 9070 XT: 0 of every pipeline the game
@@ -90,7 +127,7 @@ if ($Gpu) { $env:KYTY_GPU = $Gpu }
 # _PipelineCache (a copy where the drive has no hard links). Not a copy in %TEMP% (v20261017): a program put into
 # %TEMP% under another name and started there is what droppers do, and Windows Defender's heuristics took the precompile
 # for a trojan (issue #47).
-$runAs = Join-Path $PSScriptRoot '_PipelineCache\precompile-as-emulator'
+$runAs = Join-Path $cacheRoot 'precompile-as-emulator'
 New-Item -ItemType Directory -Force $runAs | Out-Null
 foreach ($file in @(Get-Item $Exe) + @(Get-ChildItem (Split-Path $Exe) -Filter *.dll)) {
 	$name = if ($file.FullName -eq (Get-Item $Exe).FullName) { 'kyty_emulator.exe' } else { $file.Name }
@@ -101,7 +138,7 @@ foreach ($file in @(Get-Item $Exe) + @(Get-ChildItem (Split-Path $Exe) -Filter *
 }
 $Exe = "$runAs\kyty_emulator.exe"
 # (v20261017's copy in %TEMP%, no longer used.)
-Remove-Item -LiteralPath (Join-Path ([IO.Path]::GetTempPath()) 'kyty-precompile-as-emulator') -Recurse -Force -ErrorAction SilentlyContinue
+if (!$ShaderFeatureTrial) { Remove-Item -LiteralPath (Join-Path ([IO.Path]::GetTempPath()) 'kyty-precompile-as-emulator') -Recurse -Force -ErrorAction SilentlyContinue }
 # The game's sce_sys\param.json (its title and version). The game is its folder (eboot.bin and sce_sys) or the
 # folder packed into a ZArchive (a .zar file, read without extracting it): a .zar's is copied out by the program.
 function Read-GameParam([string]$game) {
@@ -130,14 +167,14 @@ function Rename-TitleCaches([string]$game) {
 	$title = $info.titleId
 	$id = "$($title)_$($info.contentVersion)"
 	$moves = @()
-	foreach ($dir in @($PSScriptRoot, "$PSScriptRoot\_Build\static-precompile")) {
+	foreach ($dir in $(if ($ShaderFeatureTrial) { @() } else { @($PSScriptRoot, "$PSScriptRoot\_Build\static-precompile") })) {
 		$moves += , @("$dir\seeds.seeds", "$dir\seeds-$id.seeds")
 		$moves += , @("$dir\recorded.seeds", "$dir\recorded-$id.seeds")
 	}
-	foreach ($file in @(Get-ChildItem "$PSScriptRoot\_PipelineCache\static\$title.*" -File -ErrorAction SilentlyContinue)) {
+	foreach ($file in @(Get-ChildItem "$cacheRoot\static\$title.*" -File -ErrorAction SilentlyContinue)) {
 		$moves += , @($file.FullName, (Join-Path $file.DirectoryName ($id + $file.Name.Substring($title.Length))))
 	}
-	foreach ($file in @(Get-ChildItem "$PSScriptRoot\_PipelineCache\warmup-v2\*\$title.shaders" -File -ErrorAction SilentlyContinue)) {
+	foreach ($file in @(Get-ChildItem "$cacheRoot\warmup-v2\*\$title.shaders" -File -ErrorAction SilentlyContinue)) {
 		$moves += , @($file.FullName, (Join-Path $file.DirectoryName "$id.shaders"))
 	}
 	foreach ($move in $moves) {
@@ -150,7 +187,7 @@ function Rename-TitleCaches([string]$game) {
 # The game run-windows.ps1 was given last, else the default folder.
 $lastGame = if (Test-Path "$PSScriptRoot\game-path.txt") { "$(Get-Content "$PSScriptRoot\game-path.txt" -Raw)".Trim() }
 if (!$lastGame) { $lastGame = "$env:USERPROFILE\Documents\PPSA01341-app0" }
-Rename-TitleCaches $lastGame
+if (!$ShaderFeatureTrial) { Rename-TitleCaches $lastGame }
 if (!$Game) { $Game = $lastGame }
 $info = Read-GameParam $Game
 if (!$info) { throw "no sce_sys\param.json in $Game (-Game <folder or .zar>, or start the game once to choose it)" }
@@ -167,7 +204,9 @@ if ($Incremental) {
 }
 # A durable marker is created before even making seeds. A killed/interrupted
 # update must NEVER look 'completed' because it merged only some shards.
-$resumeMarker = Join-Path $PSScriptRoot "_PipelineCache\static\$gameId.resume-required"
+$resumeMarker = Join-Path $cacheRoot "static\$gameId.resume-required"
+$trialReady = Join-Path $cacheRoot "static\$gameId.trial-ready"
+if ($ShaderFeatureTrial -and (Test-Path -LiteralPath $trialReady)) { Remove-Item -LiteralPath $trialReady -Force -ErrorAction Stop }
 $resumePending = (Test-Path -LiteralPath $resumeMarker) -or ($Incremental -and $ForceResume)
 if ($Incremental -and !$resumePending) {
     New-Item -ItemType Directory -Force (Split-Path $resumeMarker) | Out-Null
@@ -201,7 +240,7 @@ if ($Incremental -and !$resumePending -and !$ReplaceCache -and !$RefreshSeeds -a
 	$inspection = @(& $Exe --game $Game --seeds $Seeds --status 2>&1)
 	$inspectionText = ($inspection | Out-String)
 	if ($LASTEXITCODE -eq 0) {
-		$pending = @(Get-ChildItem "$PSScriptRoot\_PipelineCache\static\$gameId.*.shard*" -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.tmp' })
+		$pending = @(Get-ChildItem "$cacheRoot\static\$gameId.*.shard*" -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '*.tmp' })
 		$fingerprint = $null
 		if (Get-Command Get-KytyShaderFingerprint -ErrorAction SilentlyContinue) {
 			if ($inspectionText -match 'static cache (current|outdated)') {
@@ -241,11 +280,11 @@ if ($Incremental -and !$resumePending -and !$ReplaceCache -and !$RefreshSeeds -a
 		elseif ($inspectionText -match 'static cache stale') {
 			Write-Host 'cache:      GPU/driver-incompatible binary format: old driver binaries cannot be reused.'
 			# Never overwrite an incompatible old cache: archive it first (same drive, quick rename).
-			$activeDir = Join-Path $PSScriptRoot '_PipelineCache\static'
+			$activeDir = Join-Path $cacheRoot 'static'
 			$extensions = @('.binaries', '.blobs', '.bin')
 			$oldFiles = @($extensions | ForEach-Object { Join-Path $activeDir ($gameId + $_) } | Where-Object { Test-Path -LiteralPath $_ })
 			if ($oldFiles.Count) {
-				$backupDir = Join-Path $PSScriptRoot ('_PipelineCache\archived-incompatible\' + $gameId + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
+				$backupDir = Join-Path $cacheRoot ('archived-incompatible\' + $gameId + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
 				New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
 				foreach ($oldFile in $oldFiles) { Move-Item -LiteralPath $oldFile -Destination $backupDir -ErrorAction Stop }
 				$features = Join-Path $activeDir ($gameId + '.features')
@@ -257,7 +296,7 @@ if ($Incremental -and !$resumePending -and !$ReplaceCache -and !$RefreshSeeds -a
 	}
 }
 if ($ExportHints) {
-	$recordings = @(Get-ChildItem "$PSScriptRoot\_PipelineCache\warmup-v2\*\$gameId.shaders" -File -ErrorAction SilentlyContinue)
+	$recordings = @(Get-ChildItem "$cacheRoot\warmup-v2\*\$gameId.shaders" -File -ErrorAction SilentlyContinue)
 	if (!$recordings) { throw "no recorded play of $gameId in _PipelineCache\warmup-v2 (play first, with the shader warmup on)" }
 	$out = "$PSScriptRoot\my-hints-$gameId.hints"
 	$arguments = @('--game', $Game, '--seeds', $Seeds, '--make-hints', $out)
@@ -273,6 +312,8 @@ if ($ExportHints) {
 	exit 0
 }
 $recordedLost = $false
+$trialInputsRoot = Join-Path $PSScriptRoot '_Build\shader-feature-trial\inputs'
+if ($ShaderFeatureTrial -and $Recorded -eq '*') { New-Item -ItemType Directory -Force $trialInputsRoot | Out-Null }
 if ($Recorded -eq '*') {
 	$Recorded = ''
 	$hints = "$PSScriptRoot\tools\local\static-precompile\hints-$gameId.hints"
@@ -288,14 +329,17 @@ if ($Recorded -eq '*') {
 	# then met (2-3 s to compile, every launch until the driver cache kept it).
 	$sources = @()
 	if (Test-Path $hints) {
-		$released = Join-Path (Split-Path $Seeds) "released-$gameId.seeds"
+		$released = Join-Path $(if ($ShaderFeatureTrial) { $trialInputsRoot } else { Split-Path $Seeds }) "released-$gameId.seeds"
 		& $Exe --game $Game --seeds $Seeds --apply-hints $hints --out $released
-		if ($LASTEXITCODE) { Write-Host 'the release''s specialization hints could not be applied (kyty_shader_precompile --apply-hints)' }
+		if ($LASTEXITCODE) {
+			if ($ShaderFeatureTrial) { throw 'Trial precompile: applying released specialization hints failed; readiness not granted' }
+			Write-Host 'the release''s specialization hints could not be applied (kyty_shader_precompile --apply-hints)'
+		}
 		else { $sources += $released }
 	}
 	# Through the pipeline: `@(...).FullName` of no recording is $null, a source that made --make-hints fail, and then
 	# a PC without recorded play (a new install) compiled the seeds alone, none of the release's hints (issue #28).
-	$sources += @(Get-ChildItem "$PSScriptRoot\_PipelineCache\warmup-v2\*\$gameId.shaders" -File -ErrorAction SilentlyContinue |
+	$sources += @(Get-ChildItem "$cacheRoot\warmup-v2\*\$gameId.shaders" -File -ErrorAction SilentlyContinue |
 		ForEach-Object { $_.FullName })
 	$manual = Join-Path (Split-Path $Seeds) "recorded-$gameId.seeds"
 	if (Test-Path $manual) { $sources += $manual }
@@ -303,15 +347,16 @@ if ($Recorded -eq '*') {
 		$Recorded = $released
 	} elseif ($sources.Count) {
 		# Their hints together (each specialization once), completed with the code of the seed file.
-		$together = Join-Path (Split-Path $Seeds) "recorded-play-$gameId.hints"
+		$together = Join-Path $(if ($ShaderFeatureTrial) { $trialInputsRoot } else { Split-Path $Seeds }) "recorded-play-$gameId.hints"
 		$arguments = @('--game', $Game, '--seeds', $Seeds, '--make-hints', $together)
 		foreach ($source in $sources) { $arguments += @('--recorded', $source) }
 		& $Exe @arguments
 		if (!$LASTEXITCODE) {
-			$Recorded = Join-Path (Split-Path $Seeds) "hinted-$gameId.seeds"
+			$Recorded = Join-Path $(if ($ShaderFeatureTrial) { $trialInputsRoot } else { Split-Path $Seeds }) "hinted-$gameId.seeds"
 			& $Exe --game $Game --seeds $Seeds --apply-hints $together --out $Recorded
 		}
 		if ($LASTEXITCODE) {
+			if ($ShaderFeatureTrial) { throw 'Trial precompile: combining specialization hints failed; readiness not granted' }
 			Write-Host 'the specializations of recorded play could not be gathered (kyty_shader_precompile --make-hints/--apply-hints): the seeds alone'
 			$Recorded = ''
 			$recordedLost = $true
@@ -353,14 +398,14 @@ for ($bit = 0; $bit -lt 64; $bit++) { if ($mask -band ([int64]1 -shl $bit)) { $c
 # A process scales to a few threads (4: 85%), and each translates the programs its share needs.
 if ($Jobs -le 0) { $Jobs = [math]::Max(1, [math]::Ceiling($cpus / $Threads)) }
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$logs = if (Test-Path "$PSScriptRoot\_Build") { "$PSScriptRoot\_Build\run-logs" } else { "$PSScriptRoot\logs" }
+$logs = if ($ShaderFeatureTrial) { "$PSScriptRoot\_Build\shader-feature-trial\logs" } elseif (Test-Path "$PSScriptRoot\_Build") { "$PSScriptRoot\_Build\run-logs" } else { "$PSScriptRoot\logs" }
 $logs = "$logs\$stamp-precompile"
 $logName = $logs.Substring($PSScriptRoot.Length + 1)
 New-Item -ItemType Directory -Force $logs | Out-Null
 $begin = Get-Date
 
 # Each process gets an empty NVIDIA disk cache of its own (nothing trained yet), removed when it is done.
-$nvidiaCaches = Join-Path ([IO.Path]::GetTempPath()) "kyty-precompile-$stamp"
+$nvidiaCaches = Join-Path $(if ($ShaderFeatureTrial) { "$PSScriptRoot\_Build\shader-feature-trial\scratch" } else { [IO.Path]::GetTempPath() }) "kyty-precompile-$stamp"
 # Windows 11 guesses the quality of service of a process without a window of its own from its priority and its
 # console's visibility, and may run low ones on the efficiency cores only: an i7-12700's 4 E-cores at 100% and its 16
 # P-core threads idle (#63). Each shard is tagged HighQoS (power throttling of its execution speed off), which comes
@@ -407,7 +452,7 @@ if ($Coverage) {
 $inputs = @('--seeds', "`"$Seeds`"", '--no-pipelines', '--threads', "$cpus", '--static-inputs')
 if ($InputsOnly) {
 	Wait-Precompile (Start-Precompile 'inputs' $inputs) 'inputs'
-	if (Get-Command Save-KytyShaderFingerprint -ErrorAction SilentlyContinue) {
+	if (!$ShaderFeatureTrial -and (Get-Command Save-KytyShaderFingerprint -ErrorAction SilentlyContinue)) {
 		Save-KytyShaderFingerprint $PSScriptRoot $gameId (Get-KytyShaderFingerprint $PSScriptRoot $Seeds $gameId)
 	}
 	Write-Host "wrote _PipelineCache\static\$gameId.shaders"
@@ -545,10 +590,19 @@ if ($stopped) {
     exit 130
 }
 if ($Quick) { Wait-Precompile (Start-Precompile 'inputs' $inputs) 'inputs' }
-$cache = Get-ChildItem "$PSScriptRoot\_PipelineCache\static\$gameId.bin", "$PSScriptRoot\_PipelineCache\static\$gameId.binaries",
-	"$PSScriptRoot\_PipelineCache\static\$gameId.blobs" -ErrorAction SilentlyContinue |
+$cache = Get-ChildItem "$cacheRoot\static\$gameId.bin", "$cacheRoot\static\$gameId.binaries",
+	"$cacheRoot\static\$gameId.blobs" -ErrorAction SilentlyContinue |
 	Sort-Object LastWriteTime | Select-Object -Last 1
-if (Get-Command Save-KytyShaderFingerprint -ErrorAction SilentlyContinue) {
+if ($ShaderFeatureTrial) {
+	$featuresFile = Join-Path $cacheRoot "static\$gameId.features"
+	$featureStamp = if (Test-Path -LiteralPath $featuresFile) { (Get-Content -LiteralPath $featuresFile -Raw).Trim() } else { "" }
+	if (!$cache -or $cache.Length -lt 4096 -or $featureStamp -notmatch '^3\s+3\s+[0-9a-fA-F]+$') {
+		throw "Trial cache is NOT ready: expected completed 0x3 binaries and exact 3/3 feature stamp; production cache untouched"
+	}
+	Set-Content -LiteralPath $trialReady -Value "KytyShaderFeatureTrial1 3" -Encoding Ascii
+	Write-Host "TRIAL READY: $trialReady (separate cache; not yet runtime-tested)"
+}
+if (!$ShaderFeatureTrial -and (Get-Command Save-KytyShaderFingerprint -ErrorAction SilentlyContinue)) {
 	Save-KytyShaderFingerprint $PSScriptRoot $gameId (Get-KytyShaderFingerprint $PSScriptRoot $Seeds $gameId)
 }
 if ($Incremental -and (Test-Path -LiteralPath $resumeMarker)) { Remove-Item -LiteralPath $resumeMarker -Force -ErrorAction Stop }

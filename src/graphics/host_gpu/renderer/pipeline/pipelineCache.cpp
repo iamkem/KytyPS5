@@ -28,6 +28,7 @@
 #include "native-preparation-scratch.h"
 #include "native-resource-state.h"
 #include "shader-warmup-cache.h"
+#include "shader-feature-trial.h"
 #include "scene-tags.h"
 #include "live-census.h"
 #include "live-counters.h"
@@ -2617,7 +2618,7 @@ void PipelineCache::FinishCompileWorkers() {
 // The compiler inputs the static precompile compiled, as a warmup file: what the shader prefetch
 // translates (precompile-windows.ps1 writes it next to the static pipeline cache).
 static std::filesystem::path StaticInputsPath() {
-	return std::filesystem::path("_PipelineCache") / "static" / (PipelineCacheGameId() + ".shaders");
+	return ShaderFeatureTrial::CacheRoot() / "static" / (PipelineCacheGameId() + ".shaders");
 }
 
 // Live "objects" (live-counters.h): container sizes read from the live thread (counts only, no iteration).
@@ -2673,7 +2674,7 @@ PipelineCache::PipelineCache(GraphicContext& graphics)
 	    (std::string_view(warmup) == "1" || std::string_view(warmup) == "record")) {
 		const auto device = ShaderInputDeviceSignature(m_graphics.GetPhysicalDeviceProperties());
 		const auto title = PipelineCacheTitleId();
-		const auto root = std::filesystem::path("_PipelineCache") / "warmup-v2";
+		const auto root = ShaderFeatureTrial::CacheRoot() / "warmup-v2";
 		// (Its file is the game version's, its identity line the title's: PipelineCacheGameId.)
 		auto path = root / fmt::format("{:016x}", XXH3_64bits(device.data(), device.size())) / (PipelineCacheGameId() + ".shaders");
 		// KYTY_SHADER_WARMUP_FILE: another file (a fresh recording starts empty, nothing adopted).
@@ -3189,7 +3190,7 @@ static std::string StaticCacheSignature(const vk::PhysicalDeviceProperties& prop
 }
 
 static std::filesystem::path StaticCachePath() {
-	return std::filesystem::path("_PipelineCache") / "static" / (PipelineCacheGameId() + ".bin");
+	return ShaderFeatureTrial::CacheRoot() / "static" / (PipelineCacheGameId() + ".bin");
 }
 
 // The translation features the static store's pipelines were made with (ShaderRecompiler::Frontend::TranslatorFeatures),
@@ -3198,7 +3199,7 @@ static std::filesystem::path StaticCachePath() {
 // merge of any precompile (--stamp: with recorded play lost, or -Quick, some pipelines stay as they were: another run
 // would not make them, so the store is not out of date for that). None (an older store): 0.
 static std::filesystem::path StaticFeaturesPath() {
-	return std::filesystem::path("_PipelineCache") / "static" / (PipelineCacheGameId() + ".features");
+	return ShaderFeatureTrial::CacheRoot() / "static" / (PipelineCacheGameId() + ".features");
 }
 
 static std::pair<uint32_t, uint32_t> ReadStaticStamp() {
@@ -3255,7 +3256,7 @@ static std::optional<uint64_t> ReadStaticHintsStamp() {
 // Its pipelines as the driver's binaries (VK_KHR_pipeline_binary), read when needed: the driver keeps a
 // copy of a whole pipeline cache in memory. Headed by the GPU, the driver and its global pipeline key.
 static std::filesystem::path StaticBinariesPath() {
-	return std::filesystem::path("_PipelineCache") / "static" / (PipelineCacheGameId() + ".binaries");
+	return ShaderFeatureTrial::CacheRoot() / "static" / (PipelineCacheGameId() + ".binaries");
 }
 
 static std::string StaticBinariesSignature(GraphicContext& graphics) {
@@ -3282,7 +3283,7 @@ static bool StaticBlobsEnabled() {
 }
 
 static std::filesystem::path StaticBlobsPath() {
-	return std::filesystem::path("_PipelineCache") / "static" / (PipelineCacheGameId() + ".blobs");
+	return ShaderFeatureTrial::CacheRoot() / "static" / (PipelineCacheGameId() + ".blobs");
 }
 
 static std::string StaticBlobsSignature(const vk::PhysicalDeviceProperties& properties) {
@@ -3330,6 +3331,10 @@ static std::vector<uint8_t> ReadPipelineCacheFile(const std::filesystem::path& p
 }
 
 void PipelineCache::InitializeStaticCache(bool create) {
+	if (ShaderFeatureTrial::Enabled() &&
+	    (PipelineCacheTitleId().empty() || KYTY_BUILD != KYTY_BUILD_RELEASE)) {
+		EXIT("Shader feature trial requires a recognized title and a Release executable.\n");
+	}
 	if (PipelineCacheTitleId().empty() || KYTY_BUILD != KYTY_BUILD_RELEASE) return;
 #ifndef KYTY_STATIC_PRECOMPILE
 	// The game's shaders translated as its static pipeline store's were (before any is translated: the pipeline cache's
@@ -3350,6 +3355,44 @@ void PipelineCache::InitializeStaticCache(bool create) {
 			PipelineCacheLog("Translation features {:#x} off: the static pipeline store was made without them (precompile "
 			                 "again to use them)",
 			                 off);
+	}
+	// A trial cannot use the normal cache as a fallback, or start with no compatible
+	// pipelines: the changed SPIR-V may cause multi-second first-use compilation.
+	// Precompilation uses this same isolated root but is not subject to the runtime gate.
+	if (ShaderFeatureTrial::Enabled() && !create) {
+		namespace Translate = ShaderRecompiler::Frontend;
+		constexpr uint32_t TrialFeatures = Translate::TranslatorFeatureCooperativeHalves |
+		                                   Translate::TranslatorFeatureTableSlotsAtUse;
+		std::error_code error;
+		const auto store = StaticBinariesPath();
+		const auto ready_path = ShaderFeatureTrial::CacheRoot() / "static" /
+		                        (PipelineCacheGameId() + ".trial-ready");
+		std::ifstream ready(ready_path);
+		std::string   marker;
+		if (ready) std::getline(ready, marker);
+		const char* cache_setting = std::getenv("KYTY_STATIC_PIPELINE_CACHE");
+		const bool  cache_disabled = cache_setting != nullptr && std::string_view(cache_setting) == "0";
+		const bool  has_store = m_graphics.pipeline_binaries_enabled &&
+		                        std::filesystem::is_regular_file(store, error);
+		// Existence alone is insufficient: reject stale/corrupt driver signatures
+		// before any guest work or first-use shader compilation.
+		const auto validated_store = has_store
+		    ? PipelineBinaries::Open(m_graphics.device, store, StaticBinariesSignature(m_graphics))
+		    : nullptr;
+		// The index checksum alone does not cover the binary payloads. Reject
+		// any corrupt payload before the game can trigger first-use recompiles.
+		const bool store_compatible = validated_store && validated_store->VerifyAllData();
+		if (Translate::TranslatorDeviceFeatures() != TrialFeatures ||
+		    Translate::TranslatorFeatureSet() != TrialFeatures ||
+		    ReadStaticFeatures() != TrialFeatures ||
+		    std::getenv("KYTY_SHADER_WARMUP_FILE") != nullptr ||
+		    cache_disabled || !store_compatible ||
+		    marker != "KytyShaderFeatureTrial1 3") {
+			EXIT("Shader feature trial: the isolated 0x3 pipeline generation is not ready. "
+			     "The regular cache is untouched; run the separate -ShaderFeatureTrial -Full precompile first.\n");
+		}
+		PipelineCacheLog("Shader feature trial: isolated cache {}, translation features 0x3",
+		                 Common::PathToString(ShaderFeatureTrial::CacheRoot()));
 	}
 #endif
 	// KYTY_STATIC_PIPELINE_CACHE=0: without it (first-encounter comparisons).
@@ -3452,9 +3495,9 @@ void PipelineCache::InitializeDriverCache() {
 		return;
 	}
 
-	m_driver_cache_path     = std::filesystem::path("_PipelineCache") / (title_id + ".bin");
+	m_driver_cache_path     = ShaderFeatureTrial::CacheRoot() / (title_id + ".bin");
 	if (!m_driver_cache_key.empty()) {
-		m_driver_cache_path = std::filesystem::path("_PipelineCache") / "local" /
+		m_driver_cache_path = ShaderFeatureTrial::CacheRoot() / "local" /
 		                      m_driver_cache_key / (title_id + ".bin");
 	}
 	// The launcher keeps one cache across emulator builds: pipelines of changed shaders pile up in it, so past

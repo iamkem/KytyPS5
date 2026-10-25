@@ -90,8 +90,22 @@ param(
 	[string]$Gpu = '',
 	[switch]$Prompt,
 	[switch]$Follow,
-	[switch]$DryRun
+	[switch]$DryRun,
+	# Separate, opt-in 0x3 shader generation. Never use the normal shader/cache maintenance path.
+	[switch]$ShaderFeatureTrial
 )
+if ($ShaderFeatureTrial) {
+	if (!$Game -or $Precompile -or $Prompt) { throw '-ShaderFeatureTrial requires explicit -Game and refuses -Precompile/-Prompt' }
+	if ($env:KYTY_SHADER_WARMUP_FILE -or $env:KYTY_LANE_LOCAL_COOP -or $env:KYTY_TABLE_SLOTS_AT_USE -or $env:KYTY_NATIVE_FLOAT_MIN_MAX) {
+		throw 'Shader feature trial refuses inherited warmup and translator overrides'
+	}
+} else {
+	$hiddenTrial = (($Set -join ',') -match '(?:^|,)KYTY_SHADER_FEATURE_TRIAL=1(?:,|$)')
+	$configTrial = try { ((Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json).environment.KYTY_SHADER_FEATURE_TRIAL -eq '1') } catch { $false }
+	if ($env:KYTY_SHADER_FEATURE_TRIAL -eq '1' -or $hiddenTrial -or $configTrial) {
+		throw 'Use -ShaderFeatureTrial explicitly to avoid mixing production and experimental caches'
+	}
+}
 $ErrorActionPreference = 'Stop'
 if (!(Test-Path $Exe)) { throw "missing $Exe; build it with build-windows.cmd" }
 
@@ -183,7 +197,7 @@ $gameFile = "$PSScriptRoot\game-path.txt"
 $remember = [bool]$Game
 $lastGame = if (Test-Path $gameFile) { "$(Get-Content $gameFile -Raw)".Trim() }
 if (!$lastGame) { $lastGame = "$env:USERPROFILE\Documents\PPSA01341-app0" }
-if (!$DryRun) { Rename-TitleCaches $lastGame }
+if (!$DryRun -and !$ShaderFeatureTrial) { Rename-TitleCaches $lastGame }
 if (!$Game) { $Game = $lastGame }
 if ($Prompt -or (!$remember -and !(Test-Game $Game))) { Initialize-Dialogs }
 if (!$remember -and !(Test-Game $Game)) {
@@ -191,7 +205,7 @@ if (!$remember -and !(Test-Game $Game)) {
 	if ($dialog.ShowDialog() -eq 'OK') { $Game = $dialog.SelectedPath; $remember = $true }
 }
 if (!(Test-Game $Game)) { throw "no eboot.bin in $Game (nor a .zar archive)" }
-if ($remember) { Set-Content $gameFile $Game -Encoding UTF8 }
+if ($remember -and !$ShaderFeatureTrial) { Set-Content $gameFile $Game -Encoding UTF8 }
 # Its title and version (sce_sys\param.json): the emulator is tested with one of them.
 $testedVersions = @('PPSA01341 01.007.000', 'PPSA01341 01.005.000')
 $param = Read-GameParam $Game
@@ -329,6 +343,12 @@ foreach ($pair in ($Set | ForEach-Object { $_ -split ',(?=[A-Za-z_][A-Za-z0-9_]*
 	elseif ($environment.Contains($key)) { $environment.Remove($key); Remove-Item "env:$key" -ErrorAction SilentlyContinue }
 	else { $environment[$key] = '0' }
 }
+if ($ShaderFeatureTrial) {
+	foreach ($key in @('KYTY_SHADER_WARMUP_FILE', 'KYTY_LANE_LOCAL_COOP', 'KYTY_TABLE_SLOTS_AT_USE', 'KYTY_NATIVE_FLOAT_MIN_MAX', 'KYTY_STATIC_PIPELINE_CACHE')) {
+		if ($environment.Contains($key)) { throw "Shader feature trial refuses $key override" }
+	}
+	$environment['KYTY_SHADER_FEATURE_TRIAL'] = '1'
+}
 # Above 60 Hz (-Fps120, -Vblank; after -Set, whose engine settings get it too): Demon's Souls steps its game by at
 # least a frame of its target rate each frame (gameMinDeltaTime below 0, its default: 1/60 s, the cinematic mode's
 # 1/30), so frames past that rate played the game that much faster (issue #22: Stonefang 2-3 at 74 fps walked 4.52 m/s,
@@ -384,7 +404,7 @@ if ('KYTY_RECORDING_CPUS', 'KYTY_RENDER_CPUS' | Where-Object { $environment[$_] 
 }
 
 $quoted = @('--game', "`"$Game`"") + ($options | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } })
-$logDir = if (Test-Path "$PSScriptRoot\_Build") { "$PSScriptRoot\_Build\run-logs" } else { "$PSScriptRoot\logs" }
+$logDir = if ($ShaderFeatureTrial) { "$PSScriptRoot\_Build\shader-feature-trial\run-logs" } elseif (Test-Path "$PSScriptRoot\_Build") { "$PSScriptRoot\_Build\run-logs" } else { "$PSScriptRoot\logs" }
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
 Write-Host "game:     $(if ($titleName) { "$titleName, " })$version$(if (!$tested) { " (untested: the emulator is tested with $($testedVersions -join ' and '))" })"
 Write-Host "config:   $Config$(if ($Precompile) { ' (precompile)' })"
@@ -392,6 +412,12 @@ Write-Host ("affinity: 0x{0:X} ({1} CPUs){2}" -f $mask, $cpus, $(if ($environmen
 Write-Host "switches: $($environment.Count)"
 Write-Host "command:  $Exe $($quoted -join ' ')"
 if ($DryRun) { $environment.GetEnumerator() | ForEach-Object { "  $($_.Key)=$($_.Value)" }; return }
+if ($ShaderFeatureTrial) {
+	$capability = @(& $Exe --shader-feature-trial-capabilities 2>&1) -join "`n"
+	if ($LASTEXITCODE -ne 0 -or $capability -notmatch 'KytyShaderFeatureTrial1 cache=_Build/shader-feature-trial/_PipelineCache features=3') {
+		throw "Trial-capable emulator executable required; refusing to start with an old binary"
+	}
+}
 
 # Shaders, from the seed file (every shader of the game) by the precompile program: the shader
 # prefetch's inputs for this GPU and driver (_PipelineCache\static\<title>_<version>.shaders; new shaders
@@ -409,7 +435,7 @@ $passStates = "$PSScriptRoot\tools\local\static-precompile\pass-states.json"
 # Reuse existing shader seeds across builds. The executable timestamp/size is not a shader-content identity:
 # rebuilding unrelated RAM/VRAM or launcher code must never regenerate seeds or invalidate the static cache.
 # To intentionally regenerate seeds after a shader-extractor change use precompile-windows.ps1 -RefreshSeeds.
-if (!$seeds -and !$Precompile -and (Test-Path $tool) -and (Test-Path $passStates)) {
+if (!$seeds -and !$Precompile -and !$ShaderFeatureTrial -and (Test-Path $tool) -and (Test-Path $passStates)) {
 	$target = if (Test-Path "$PSScriptRoot\_Build") { "$PSScriptRoot\_Build\static-precompile\$seedName" } else { "$PSScriptRoot\$seedName" }
 	New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
 	Write-Host "shaders:  listing the game's shaders from its files (first time only)"
@@ -417,7 +443,7 @@ if (!$seeds -and !$Precompile -and (Test-Path $tool) -and (Test-Path $passStates
 	if ($LASTEXITCODE -eq 0 -and (Test-Path $target)) { $seeds = $target }
 	else { Write-Host 'shaders:  listing failed: the game compiles its shaders when they first appear' }
 }
-$shaders = !$Precompile -and $seeds -and (Test-Path $tool)
+$shaders = !$Precompile -and !$ShaderFeatureTrial -and $seeds -and (Test-Path $tool)
 # The precompile program on the launch's CPUs, its output in the console or a file: its exit code.
 function Invoke-Tool([string[]]$arguments, [string]$output = '') {
 	$parameters = @{ FilePath = $tool; WorkingDirectory = $PSScriptRoot; NoNewWindow = $true; PassThru = $true

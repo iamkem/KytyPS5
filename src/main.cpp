@@ -15,6 +15,7 @@
 #include <charconv>
 #include <cstdio>
 #include <cstdlib>
+#include <string_view>
 #include <fmt/format.h>
 
 using namespace Common;
@@ -348,6 +349,17 @@ static bool ParseArgs(int argc, char* argv[], RunOptions& options, bool& show_he
 }
 
 int main(int argc, char* argv[]) {
+	// Capability probe used by the isolated feature trial runner. No emulator init or cache access.
+	if (argc == 2 && std::string_view(argv[1]) == "--shader-feature-trial-capabilities") {
+#if KYTY_BUILD == KYTY_BUILD_RELEASE
+		std::printf("KytyShaderFeatureTrial1 cache=_Build/shader-feature-trial/_PipelineCache features=3\n");
+		std::fflush(stdout);
+		return 0;
+#else
+		std::fprintf(stderr, "Shader feature trial requires Release build\n");
+		return 2;
+#endif
+	}
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 	LocalPlatform::ReleaseRedirectedConsole();
 	LocalPlatform::AsyncStdout();

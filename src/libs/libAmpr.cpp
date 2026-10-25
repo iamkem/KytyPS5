@@ -14,6 +14,7 @@
 #include "file-offload.h"
 #include "local-platform.h"
 #include "scene-tags.h"
+#include "shader-feature-trial.h"
 #include "slow-log.h"
 
 #include <algorithm>
@@ -1587,7 +1588,7 @@ static int ReadHostFileToGuest(const std::string& host_path, uint64_t file_offse
 		(void)Loader::SystemContentParamSfoGetString("APP_VER", &version);
 		const auto root      = Common::PathToString(LibKernel::FileSystem::GetRealFilename("/app0"));
 		const auto id        = title + (version.empty() ? "" : "_" + version);
-		const auto recording = "_PipelineCache/files/" + id + ".files";
+		const auto recording = Common::PathToString(ShaderFeatureTrial::CacheRoot() / "files" / (id + ".files"));
 		SeedFileRecording(recording, "tools/local/static-precompile/files-" + id + ".files");
 		LocalPlatform::FollowKeptFiles(recording, root);
 	});

@@ -91,6 +91,16 @@ static int Usage() {
 }
 
 int main(int argc, char* argv[]) {
+	// Read-only handshake for the isolated trial script; does not initialize Vulkan or touch caches.
+	if (argc == 2 && std::string_view(argv[1]) == "--shader-feature-trial-capabilities") {
+#if KYTY_BUILD == KYTY_BUILD_RELEASE
+		std::printf("KytyShaderFeatureTrial1 cache=_Build/shader-feature-trial/_PipelineCache features=3\n");
+		return 0;
+#else
+		std::fprintf(stderr, "Shader feature trial requires Release build\n");
+		return 2;
+#endif
+	}
 	std::filesystem::path          game;
 	bool                           merge  = false;
 	bool                           prune  = false;

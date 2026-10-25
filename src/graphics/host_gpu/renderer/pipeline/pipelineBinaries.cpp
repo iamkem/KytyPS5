@@ -198,6 +198,29 @@ bool PipelineBinaries::CreateBinaries(std::span<const uint32_t> indices, VkPipel
 	return false;
 }
 
+bool PipelineBinaries::VerifyAllData() const {
+	// Only used when admitting an opt-in shader-feature trial. A valid index can
+	// still point at corrupted binary payloads; regular Open() intentionally defers
+	// expensive payload reads until a pipeline is used.
+	constexpr size_t ChunkSize = 256 * 1024;
+	std::vector<uint8_t> chunk(ChunkSize);
+	auto state = std::unique_ptr<XXH3_state_t, decltype(&XXH3_freeState)>(XXH3_createState(), &XXH3_freeState);
+	if (!state) return false;
+	for (const auto& binary: m_binaries) {
+		XXH3_64bits_reset(state.get());
+		for (uint64_t offset = 0; offset < binary.size;) {
+			const auto bytes = static_cast<size_t>(std::min<uint64_t>(ChunkSize, binary.size - offset));
+			if (!LocalPlatform::ReadScratchFile(m_file, binary.offset + offset, chunk.data(), bytes) ||
+			    XXH3_64bits_update(state.get(), chunk.data(), bytes) != XXH_OK) {
+				return false;
+			}
+			offset += bytes;
+		}
+		if (XXH3_64bits_digest(state.get()) != binary.hash) return false;
+	}
+	return !m_binaries.empty() && !m_pipelines.empty();
+}
+
 bool PipelineBinaries::Intact(const Key& key) const {
 	const auto found = m_pipelines.find(key);
 	if (found == m_pipelines.end() || found->second.count == 0) return false;
