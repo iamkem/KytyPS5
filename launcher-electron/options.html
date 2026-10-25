@@ -41,10 +41,14 @@
  <label class="field"><span>Low Latency</span><select id="lowlatency"><option value="true">On</option><option value="false">Off</option></select></label>
  <label class="field"><span title="Engine LOD selection and sunlight shadow distance (not GPU VRS)">Distance Detail</span><select id="distance-detail"><option value="original">Original (preserve Graphics Detail)</option><option value="balanced">Balanced (1080 / 200 m)</option><option value="performance">Performance (720 / 125 m)</option><option value="aggressive">Aggressive (480 / 60 m)</option></select></label>
  <label class="field"><span title="Experimental: only changes PS5 Performance profile tessellation fade start on PPSA01341 v1.07">Distance Tessellation (Experimental)</span><select id="distance-tessellation"><option value="original">Original (OFF)</option><option value="early">Early Fade (12 → 10, experimental)</option></select></label>
+ <div class="field-divider"></div>
+ <label class="field"><span title="Separate translator/cache generation, not a quality preset">Shader Translation Mode</span><select id="shader-mode"><option value="standard">Standard (0x0)</option><option value="experimental">Experimental (0x3)</option></select></label>
+ <div class="shader-mode-info"><span id="shader-mode-status" role="status">Checking experimental cache…</span><button id="shader-mode-restore" type="button">Restore Standard</button></div>
  <label class="field"><span>FPS Overlay</span><select id="hud"><option value="0">Off</option><option value="1">FPS</option><option value="2">Detailed</option></select></label>
  <div class="field-divider"></div><p class="muted-info"><strong>Current profile</strong><br><span id="preset-summary"></span></p>
  <p class="muted-info">Distance Detail only overrides engine LOD selection and sunlight shadow distance. Original preserves all existing settings; Graphics Detail still controls nearby ambient/spot shadows and texture quality. For nearby shadows choose Graphics Detail Standard. No automatic shader-cache rebuild.</p>
  <p class="muted-info">Distance Tessellation is an <strong>opt-in research test</strong>, not a proven FPS improvement. Early Fade changes only the PS5 Performance profile fade-start value from 12.0 to 10.0; density and recursion remain unchanged, but mid-distance geometry may change. Limited to verified game version 1.07 and exact original profile text; does nothing if the game uses another profile. Check image correctness before normal play.</p>
+ <p class="muted-info"><strong>Shader Translation Mode:</strong> Standard uses the current production cache (0x0); Experimental uses the separate precompiled 0x3 store, with native integrity checks at launch. Restore Standard and press OK to save the rollback; caches are never copied, deleted or promoted by this selector. Update Missing Shaders remains Standard-only.</p>
  <p class="muted-info">Presets set the actual internal render resolution and detail. Existing RAM16 and memory settings are never changed.</p>
 </div></div></section>
 <section id="tab-advanced" class="tab-panel" role="tabpanel"><div class="two-columns">
@@ -62,7 +66,7 @@
  <div class="path-field"><span>Game Installation</span><div class="path-controls"><input id="game-path" readonly><button id="browse-game">Browse…</button></div></div>
  <div class="path-field"><span>NVIDIA Streamline SDK</span><div class="path-controls"><input id="sdk-path" readonly><button id="browse-sdk">Browse…</button></div></div>
  <div class="field-divider"></div>
- <div class="maintenance"><p>Maintenance</p><button id="shader-update">Update Missing Shaders</button><button id="shader-view-progress">View Progress…</button><button id="logs">Open Logs</button><button id="export-hints">Export Diagnostics</button></div>
+ <div class="maintenance"><p>Maintenance</p><button id="shader-update">Update Missing Shaders</button><span class="shader-update-hint">Standard (0x0) cache only</span><button id="shader-view-progress">View Progress…</button><button id="logs">Open Logs</button><button id="export-hints">Export Diagnostics</button></div>
  <div class="field-divider"></div>
  <div class="maintenance"><p>Steam integration</p><button id="steam-setup">Set Up Steam…</button><p id="steam-hint" class="muted-info">Play as a Non-Steam Game from Steam. The launcher exits with the game; Steamworks Rich Presence is unavailable.</p></div>
  <p class="muted-info">RAM Safety limits background shader work under low RAM and uses adaptive guest backing and idle-texture retirement. Pipeline eviction follows independent RAM Diet and GPU VRAM policies; Stutter Guard has been removed. RAM16 is independent. Neither mode guarantees BSOD prevention.</p>

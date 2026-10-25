@@ -8,7 +8,7 @@ const defaults = Object.freeze({
   redzone: true, cheats: false, ecores: false, fps120: false, render: 1440,
   ratio: '16:9', quality: 'standard', distance_detail: 'original', distance_tessellation: 'original', vsync: false, hdr: false, framegen: 0,
   hud: 1, streamline: '', safegpu: false, upscaler: 'dlss', render_dlss: 1152,
-  fsr: false, output: '4k', lowlatency: true, present_direct: false, antilag: false,
+  fsr: false, output: '4k', shader_mode: 'standard', lowlatency: true, present_direct: false, antilag: false,
   fps30: false, dlss_model: 'auto', gpu: '',
   ram_diet: true, ram16_backing: true, ram_safety: true, vram_budget_mb: 0,
   discord_presence: false, discord_app_id: '', discord_large_image: ''
@@ -34,6 +34,7 @@ function clean(candidate = {}) {
     } else if (typeof value === 'string' && value.length < 4096) result[key] = value;
   }
   if (!['standard','low','lowest'].includes(result.quality)) result.quality = 'standard';
+  if (!['standard','experimental'].includes(result.shader_mode)) result.shader_mode = 'standard';
   if (!['original','balanced','performance','aggressive'].includes(result.distance_detail)) result.distance_detail = 'original';
   if (!['original','early'].includes(result.distance_tessellation)) result.distance_tessellation = 'original';
   if (!['16:9','21:9','32:9'].includes(result.ratio)) result.ratio = '16:9';
@@ -112,15 +113,24 @@ function gameValid(settings) {
   return Boolean(settings.game && (fs.existsSync(path.join(settings.game,'eboot.bin')) ||
     (settings.game.toLowerCase().endsWith('.zar') && fs.existsSync(settings.game))));
 }
-function buildPlayArgs(root, raw) {
+function buildPlayArgs(root, raw, {inspectTrial = require('./shader-trial.cjs').inspect} = {}) {
   const s = clean(raw);
   if (s.fps30 && s.fps120) throw Error('Choose either 30 FPS lock or up to 120 FPS, not both.');
   const exe = findEmulator(root);
   if (!fs.existsSync(exe)) throw Error('Latest Kyty native build is missing (_Build/latest/native-build/kyty_emulator.exe).');
   if (!gameValid(s)) throw Error('Game not found. Choose a folder containing eboot.bin and sce_sys.');
+  if (s.shader_mode === 'experimental') {
+    const trial = inspectTrial(root, s.game, exe);
+    if (!trial.ready) {
+      const error = Error('Experimental shader 0x3 unavailable: ' + trial.reason);
+      error.code = 'SHADER_TRIAL_NOT_READY';
+      throw error;
+    }
+  }
   const [width,height] = s.resolution.split('x');
   const args = ['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(root,'run-windows.ps1'),
     '-Follow','-Exe',exe,'-Game',s.game,'-Width',width,'-Height',height,'-Language',String(s.language)];
+  if (s.shader_mode === 'experimental') args.push('-ShaderFeatureTrial');
   if (s.fullscreen) { args.push('-Fullscreen'); if (s.aspect && s.ratio === '16:9') args.push('-AspectFit'); }
   if (!s.redzone) args.push('-NoRedZone');
   if (s.fps120) args.push('-Fps120');

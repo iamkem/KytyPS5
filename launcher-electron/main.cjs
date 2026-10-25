@@ -9,6 +9,7 @@ const cache = require('./cache.cjs');
 const versions=require('./cache-generations.cjs');
 const {ShaderProgress}=require('./shader-progress.cjs');
 const shaderInputs=require('./shader-inputs.cjs');
+const shaderTrial=require('./shader-trial.cjs');
 const {ModManager}=require('./mod-manager.cjs');
 const {DiscordPresence,isConfigured,validConfig,readGamePid}=require('./discord-presence.cjs');
 const {isSteamGameMode,steamShortcut}=require('./steam-integration.cjs');
@@ -82,6 +83,10 @@ if (process.argv.includes('--smoke-ui')) {
   process.env.KYTY_LAUNCHER_SMOKE_CONFIG=scratch;
   process.on('exit',()=>{try{fs.unlinkSync(scratch);}catch{}});
 }
+// Only one Launcher instance may own this installation's settings/menu at once.
+// A separate native/precompile process is also checked immediately before Play.
+if(!app.requestSingleInstanceLock())app.exit(0);
+app.on('second-instance',()=>{if(mainWindow&&!mainWindow.isDestroyed()){mainWindow.show();mainWindow.focus();}});
 function createWindow() {
   mainWindow = new BrowserWindow({
     width:728,height:458,useContentSize:true,resizable:false,maximizable:false,show:!steamGameMode,
@@ -134,6 +139,7 @@ function openOptions() {
   optionsWindow.on('closed',()=>{
     if (!optionsCommitted && optionsSnapshot) logic.saveSettings(ROOT,optionsSnapshot);
     optionsWindow=null;optionsSnapshot=null;
+    mainWindow?.webContents.send('launcher:settings-changed',currentSettings());
   });
 }
 function startDiscordAgent(settings,gamePid){
@@ -159,7 +165,7 @@ function startDiscordAgent(settings,gamePid){
     return false;
   }
 }
-function launchCommand(spec,{restore=false,visible=false,onGamePid=null,silentError=false}={}) {
+function launchCommand(spec,{restore=false,visible=false,onGamePid=null,silentError=false,shaderMode='standard'}={}) {
   const child=spawn(spec.command,spec.args,{cwd:ROOT,windowsHide:!visible,
     stdio:onGamePid?['ignore','pipe','pipe']:'ignore'});
   if(onGamePid){
@@ -179,7 +185,7 @@ function launchCommand(spec,{restore=false,visible=false,onGamePid=null,silentEr
       dialog.showErrorBox('Unable to start KytyPS5',err.message);
     }
   });
-  child.on('exit',()=>{if (restore&&mainWindow) {mainWindow.show();mainWindow.focus();mainWindow.webContents.send('launcher:game-exit');}});
+  child.on('exit',code=>{if (restore&&mainWindow) {mainWindow.show();mainWindow.focus();mainWindow.webContents.send('launcher:game-exit',{exitCode:code,shaderMode});}});
   child.unref();
   return child;
 }
@@ -197,18 +203,35 @@ app.whenReady().then(()=>{
       displays:screen.getAllDisplays().map((d,i)=>({id:String(i),label:i===0?'Primary monitor':'Monitor '+(i+1),width:d.size.width,height:d.size.height}))};
   });
   ipcMain.handle('launcher:save',(_event,data)=>logic.saveSettings(ROOT,data));
+  ipcMain.handle('launcher:shader-trial-status',(_event,game)=>
+    shaderTrial.inspect(ROOT,typeof game==='string'?game:currentSettings().game,logic.findEmulator(ROOT)));
   ipcMain.handle('launcher:options',()=>{openOptions();return true;});
   ipcMain.handle('launcher:close-options',(_event,commit=false)=>{optionsCommitted=Boolean(commit);optionsWindow?.close();return true;});
   const startGame=(data,{steam=false}={})=>{
     if(cacheBusy||modBusy)throw Error('File management is in progress. Finish it before launching the game.');
+    ensureCacheIdle(); // Best-effort external emulator/precompile detection before every Play, including Steam.
     if(mods.status(logic.clean(data).game).needsRepair)throw Error('Repair unfinished mod changes before starting the game.');
     if(['running','stopping'].includes(shaderProgress.snapshot().status))throw Error('Shader update is still running. Finish it before playing.');
-    const cfg=logic.clean(data);
-    const spec=logic.buildPlayArgs(ROOT,cfg);
-    if(!steam)logic.saveSettings(ROOT,cfg); // Steam auto-launch is read-only for user settings.
     if (gameProcess) throw Error('KytyPS5 is already running.');
+    let cfg=logic.clean(data);
+    let spec;
+    try {
+      spec=logic.buildPlayArgs(ROOT,cfg);
+    } catch(error) {
+      if(error.code!=='SHADER_TRIAL_NOT_READY'||steam)throw error;
+      const answer=dialog.showMessageBoxSync(mainWindow,{
+        type:'warning',title:'Experimental shader 0x3 not ready',
+        message:'The Experimental shader cache cannot be used safely.',
+        detail:error.message+'\n\nSwitch back to Standard (0x0) and play with the existing cache? The experimental cache will not be changed.',
+        buttons:['Use Standard & Play','Cancel'],defaultId:1,cancelId:1,noLink:true
+      });
+      if(answer!==0)return false;
+      cfg=logic.clean({...cfg,shader_mode:'standard'});
+      spec=logic.buildPlayArgs(ROOT,cfg);
+    }
+    if(!steam)logic.saveSettings(ROOT,cfg); // Steam auto-launch is read-only for user settings.
     stopIdlePresence();
-    const child=launchCommand(spec,{restore:!steam,silentError:steam,onGamePid:isConfigured(cfg)?pid=>{
+    const child=launchCommand(spec,{restore:!steam,silentError:steam,shaderMode:cfg.shader_mode,onGamePid:isConfigured(cfg)?pid=>{
       discordLog('GAME_PID_DETECTED',String(pid));
       startDiscordAgent(cfg,pid);
     }:null});
@@ -253,6 +276,7 @@ app.whenReady().then(()=>{
     return r.canceled ? null : r.filePaths[0];
   });
   ipcMain.handle('launcher:shader-update',()=>{
+    if(currentSettings().shader_mode==='experimental')throw Error('Update Missing Shaders updates Standard only. Switch to Standard before updating.');
     if(cacheBusy)throw Error('Cache switch/backup in progress.');
     const status=shaderProgress.snapshot();
     if(status.status==='running'||status.status==='stopping') {
@@ -542,6 +566,21 @@ app.whenReady().then(()=>{
         // Review the Graphics and Shader Cache screens, not only the default Display tab.
         await optionsWindow.webContents.executeJavaScript("document.querySelector('[data-tab=graphics]').click()");
         await new Promise(resolve=>setTimeout(resolve,250));
+        const shaderModeUi=await optionsWindow.webContents.executeJavaScript(
+          "(async()=>({select:!!document.querySelector('#shader-mode'),restore:!!document.querySelector('#shader-mode-restore'),"+
+          "status:!!document.querySelector('#shader-mode-status'),bridge:typeof window.launcher.shaderTrialStatus==='function',"+
+          "trial:await window.launcher.shaderTrialStatus(document.querySelector('#game-path').value)}))()");
+        if(!shaderModeUi.select||!shaderModeUi.restore||!shaderModeUi.status||!shaderModeUi.bridge||
+           typeof shaderModeUi.trial.ready!=='boolean')throw Error('Shader Translation Mode UI failed: '+JSON.stringify(shaderModeUi));
+        console.log('ELECTRON_SHADER_MODE_UI_PASS '+JSON.stringify(shaderModeUi));
+        const modeInteraction=await optionsWindow.webContents.executeJavaScript(
+          "(()=>{const select=document.querySelector('#shader-mode');select.value='experimental';"+
+          "select.dispatchEvent(new Event('change',{bubbles:true}));"+
+          "document.querySelector('#shader-mode-restore').click();"+
+          "return {mode:select.value,restoreDisabled:document.querySelector('#shader-mode-restore').disabled};})()");
+        if(modeInteraction.mode!=='standard'||!modeInteraction.restoreDisabled)
+          throw Error('Shader Standard rollback UI failed: '+JSON.stringify(modeInteraction));
+        console.log('ELECTRON_SHADER_MODE_ROLLBACK_UI_PASS '+JSON.stringify(modeInteraction));
         fs.writeFileSync(path.join(reviewDir,'review-graphics.png'),(await optionsWindow.webContents.capturePage()).toPNG());
         await optionsWindow.webContents.executeJavaScript("document.querySelector('[data-tab=mods]').click()");
         const modUi=await optionsWindow.webContents.executeJavaScript(
@@ -566,7 +605,7 @@ app.whenReady().then(()=>{
         if(cacheScreen.rows<1 || cacheScreen.selected!==0 || !cacheScreen.deleteDisabled || cacheScreen.locked<1 || cacheScreen.protectedBadges<1 || cacheScreen.protectedSelectable || !cacheScreen.snapshot || cacheScreen.activeSelectable || cacheScreen.sections<2 || !cacheScreen.text)
           throw Error('Shader Cache UI did not list current vs archived caches safely: '+JSON.stringify(cacheScreen));
         fs.writeFileSync(path.join(reviewDir,'review-cache.png'),(await optionsWindow.webContents.capturePage()).toPNG());
-        const inputUi=await optionsWindow.webContents.executeJavaScript("({rows:document.querySelectorAll('.input-check').length,protected:[...document.querySelectorAll('.cache-title-line')].some(el=>el.textContent.includes('KEEP — BASE SEEDS')),fingerprint:[...document.querySelectorAll('.cache-group-heading')].some(el=>el.textContent.includes('SHADER COMPILATION INPUTS')),removeDisabled:document.querySelector('#inputs-remove').disabled})");
+        const inputUi=await optionsWindow.webContents.executeJavaScript("({rows:document.querySelectorAll('.input-entry').length,protected:[...document.querySelectorAll('.cache-title-line')].some(el=>el.textContent.includes('KEEP — BASE SEEDS')),fingerprint:[...document.querySelectorAll('.cache-group-heading')].some(el=>el.textContent.includes('SHADER COMPILATION INPUTS')),removeDisabled:document.querySelector('#inputs-remove').disabled})");
         if(!inputUi.protected||!inputUi.fingerprint||!inputUi.removeDisabled||inputUi.rows<1)throw Error('Shader compilation inputs view failed: '+JSON.stringify(inputUi));
         console.log('ELECTRON_INPUTS_UI_PASS '+JSON.stringify(inputUi));
         console.log('ELECTRON_CACHE_SCREEN_PASS '+JSON.stringify(cacheScreen));

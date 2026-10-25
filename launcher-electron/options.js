@@ -1,5 +1,5 @@
 'use strict';
-let state,runtime,syncing=false,cacheItems=[],inputItems=[];
+let state,runtime,syncing=false,cacheItems=[],inputItems=[],shaderUpdateBusy=false;
 const $=id=>document.getElementById(id);
 const presets={
  'Ultra Performance':{render_dlss:720,quality:'lowest',fsr:false,output:'4k',upscaler:'dlss'},
@@ -14,7 +14,7 @@ const sizes={'16:9':['1280x720','1920x1080','2560x1440','3840x2160'],
 const boolKeys={'vsync':'vsync','fps120':'fps120','lowlatency':'lowlatency',
  'fsr':'fsr','fps30':'fps30','ram-diet':'ram_diet','ram16':'ram16_backing','ram-safety':'ram_safety','redzone':'redzone','safegpu':'safegpu'};
 const numberKeys={'framegen':'framegen','hud':'hud','vram':'vram_budget_mb','language':'language'};
-const plainKeys={'ratio':'ratio','resolution':'resolution','upscaler':'upscaler','dlss-model':'dlss_model','gpu-choice':'gpu','output':'output','quality':'quality','distance-detail':'distance_detail','distance-tessellation':'distance_tessellation'};
+const plainKeys={'ratio':'ratio','resolution':'resolution','upscaler':'upscaler','dlss-model':'dlss_model','gpu-choice':'gpu','output':'output','quality':'quality','distance-detail':'distance_detail','distance-tessellation':'distance_tessellation','shader-mode':'shader_mode'};
 function set(id,value){const el=$(id);if(el.type==='checkbox')el.checked=Boolean(value);else el.value=String(value);}
 function showMessage(t){$('message').textContent=t;}
 function activePreset(s=state){return Object.entries(presets).find(([,p])=>Object.keys(p).every(k=>s[k]===p[k]))?.[0]||'Custom';}
@@ -37,6 +37,8 @@ function fill(){
   set('render-height',s.upscaler==='dlss'||s.upscaler==='fsr'?s.render_dlss:s.render);
   set('game-path',s.game);set('sdk-path',s.streamline);
   set('preset',activePreset(s));
+  $('shader-mode-restore').disabled=s.shader_mode==='standard';
+  $('shader-update').disabled=shaderUpdateBusy||s.shader_mode==='experimental';
   $('preset-summary').textContent=activePreset(s)+' · '+(s.upscaler==='dlss'?'DLSS':s.upscaler==='fsr'?'FSR 3':'Game TAA')+' '+(s.upscaler==='dlss'||s.upscaler==='fsr'?s.render_dlss:s.render)+'p · '+(s.quality==='standard'?'Standard (PS5)':s.quality)+' · Distance '+s.distance_detail+' · Tessellation '+s.distance_tessellation;
   $('output').disabled=false; // chenxiao07: optional native 1080p game output supports DLSS too.
  }finally{syncing=false;}
@@ -63,6 +65,7 @@ function update(id){
   state.render_dlss=Math.min(state.render_dlss,1440);
  }
  fill();
+ if(id==='shader-mode'){showMessage(state.shader_mode==='standard'?'Standard selected — press OK to save.':'Experimental selected — press OK to save.');refreshShaderModeStatus();}
 }
 for(const id of [...Object.keys(boolKeys),...Object.keys(numberKeys),...Object.keys(plainKeys),'render-height','window-mode','hdr','cheats']){
  $(id).addEventListener('change',()=>update(id));
@@ -73,8 +76,13 @@ $('preset').addEventListener('change',async()=>{
  if(!runtime.sdk){showMessage('Choose a Streamline SDK folder before using DLSS presets.');fill();return;}
  Object.assign(state,presets[name]);
  fill();
- try{state=await window.launcher.save(state);showMessage(name+' applied');}
+ // Presets keep the legacy immediate save, but must not replace newer local
+ // mode changes with an older IPC response.
+ $('shader-mode').disabled=true;
+ $('shader-mode-restore').disabled=true;
+ try{await window.launcher.save(structuredClone(state));showMessage(name+' applied');}
  catch(e){showMessage(e.message);}
+ finally{$('shader-mode').disabled=false;fill();}
 });
 document.querySelectorAll('.tab-strip button').forEach(button=>button.addEventListener('click',()=>{
  for(const tab of document.querySelectorAll('.tab-strip button')){
@@ -84,9 +92,30 @@ document.querySelectorAll('.tab-strip button').forEach(button=>button.addEventLi
  if(button.dataset.tab==='cache')refreshCache();
  if(button.dataset.tab==='mods')refreshMods();
 }));
-$('browse-game').addEventListener('click',async()=>{const p=await window.launcher.chooseGame();if(p){state.game=p;fill();}});
+$('browse-game').addEventListener('click',async()=>{const p=await window.launcher.chooseGame();if(p){state.game=p;fill();refreshShaderModeStatus();}});
 $('browse-sdk').addEventListener('click',async()=>{const p=await window.launcher.chooseStreamline();if(p){state.streamline=p;fill();showMessage('Runtime folder selected');}});
+async function refreshShaderModeStatus(){
+ const el=$('shader-mode-status');
+ if(!state)return;
+ const game=state.game;
+ el.textContent='Checking isolated 0x3 cache…';
+ try{
+  const result=await window.launcher.shaderTrialStatus(game);
+  if(state.game!==game)return;
+  el.textContent=result.ready
+    ? '0x3 cache ready ('+(result.bytes/(1024**3)).toFixed(2)+' GiB). Native verifies its checksum at startup.'
+    : '0x3 unavailable: '+result.reason;
+  el.dataset.ready=String(result.ready);
+ }catch(error){el.textContent='0x3 unavailable: '+error.message;el.dataset.ready='false';}
+}
+$('shader-mode-restore').addEventListener('click',()=>{
+ state.shader_mode='standard';
+ fill();
+ showMessage('Standard restored — press OK to save. Shader caches are unchanged.');
+ refreshShaderModeStatus();
+});
 $('shader-update').addEventListener('click',async()=>{
+ if(state.shader_mode==='experimental'){showMessage('Update Missing Shaders affects Standard cache only; select Standard first.');return;}
  try{await window.launcher.save(state);const next=await window.launcher.shaderUpdate();shaderSummary(next);showMessage('Shader progress window opened');}catch(e){showMessage(e.message);}
 });
 $('export-hints').addEventListener('click',async()=>{
@@ -100,9 +129,10 @@ $('cache-update-view').addEventListener('click',()=>window.launcher.showShaderPr
 function shaderSummary(s){
  if(!s)return;
  const running=['running','stopping'].includes(s.status);
+ shaderUpdateBusy=running;
  const count=s.shards?(s.shards.done+'/'+s.shards.total+' shards done'):'';
  $('cache-update-status').textContent='Shader update: '+(s.phase||s.status)+(count?' · '+count:'');
- $('shader-update').disabled=running;
+ $('shader-update').disabled=running||state?.shader_mode==='experimental';
 }
 window.launcher.onShaderProgress(shaderSummary);
 window.launcher.shaderStatus().then(shaderSummary).catch(()=>{});
@@ -185,7 +215,7 @@ function renderCache(){
   list.append(heading);
   for(const item of inputItems){
    const row=document.createElement('div');
-   row.className='cache-entry cache-'+item.cleanupLevel+(item.locked?' cache-locked':'');
+   row.className='cache-entry input-entry cache-'+item.cleanupLevel+(item.locked?' cache-locked':'');
    const description=document.createElement('div');description.className='cache-entry-text';
    const line=document.createElement('div');line.className='cache-title-line';
    const name=document.createElement('strong');name.textContent=item.title;
@@ -259,5 +289,6 @@ window.launcher.load().then(result=>{
  const list=$('language');
  for(let i=0;i<languages.length;i++){const option=document.createElement('option');option.value=String(i);option.textContent=languages[i];list.append(option);}
  fill();
+ refreshShaderModeStatus();
  if(!result.sdk)showMessage('Streamline runtime not detected');
 }).catch(e=>showMessage(e.message));
