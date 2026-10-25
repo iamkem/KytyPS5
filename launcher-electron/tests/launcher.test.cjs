@@ -162,7 +162,10 @@ test('Real run-windows.ps1 accepts Electron Play settings in DryRun',{skip:!loca
   assert.equal(result.status,0,result.stderr || result.error?.message || result.stdout);
   assert.match(result.stdout,/KYTY_RAM_DIET=1/);
   assert.match(result.stdout,/KYTY_BACKING_FILE=1/);
-  assert.match(result.stdout,/--screen-width 2560/);
+  // The user's saved display resolution may be 4K (or another supported size).
+  // Assert the explicitly selected output width instead of assuming 2560px.
+  const [expectedWidth] = s.resolution.split('x');
+  assert.match(result.stdout,new RegExp('--screen-width '+expectedWidth+'(?:\\s|$)'));
   assert.match(result.stdout,/KYTY_RENDER_HEIGHT=1080/);
   assert.match(result.stdout,/KYTY_UPSCALER=dlss/);
   assert.match(result.stdout,/KYTY_TEXTURE_REDUCE=2/);
