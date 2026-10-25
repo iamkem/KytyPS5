@@ -94,6 +94,21 @@ Targeted `llvm-objdump` and Capstone inspection of the matching initializer call
 
 **No runtime admission yet:** These constructor defaults do not establish which profile/config subsequently changes them, what enum IDs `1`/`2` mean, whether the SSR/contact passes submit real GPU work, or how much GPU time particle effects cost. In particular, `r_ssrEnableOverrides=false` **does not mean SSR is disabled**, and `r_contactShadowsEnabled=true` **does not prove active contact-shadow work** under Graphics Lowest. Next, pursue *consumer/enum mapping* and *effective runtime settings* (only with separately authorized, bounded read-only observation); GPU timing and visual-equivalence A/B remain required before **any P2/P3 override**. P2/P3 constructor-baseline static gate **PASS**, performance-tuning admission **NOT GRANTED**.
 
+## Combined P2/P3 short gameplay A/B probe (2026-10-25)
+
+To avoid testing each GPU-side feature separately, launcher `Graphics → Graphics Performance Test (Experimental)` offers **Original (default OFF)**, **Combined**, and the previously shipped **SSR 64 only**. Existing JSON key `ssr_test` remains compatible (`original|iterations64|combined`). Source-backed constructor baselines and the opt-in experimental overrides are:
+
+| Candidate | ELF constructor value | Combined trial | Why shortlisted / image risk |
+|---|---:|---:|---|
+| `r_ssrMaxIterations` + `r_ssrEnableOverrides` | `128` / `false` | `64` / `true` | Fewer SSR ray steps possible; reflections can degrade |
+| `r_ssrMaxRayLength` | `1000.0` | `600.0` | Restricts SSR ray search; distant reflections can disappear |
+| `particleRibbonTessDensity` | `1.0` | `0.5` | Fewer ribbon tessellation subdivisions possible; magical effects may visibly change |
+| `r_contactShadowsEnabled` | `true` | `false` | May avoid contact-shadow work if pass active; fine shadows can disappear |
+
+**Admission and safety:** These are heuristics for a **single exploratory bundled test**, not measured performance wins nor verified final runtime defaults. The current Lowest profile may already skip relevant work. Excluded deliberately: GI/fog/bloom global disable, unknown particle enum/budget semantics, retired occlusion/model/instance/density switches, and unsafe force shadow LOD. Windows runner appends the corresponding `KYTY_GAME_CONVARS` on a temporary virtual-copy command-line path after Quality and `-Set`, only for title `PPSA01341`, app version `01.007.000`, and when the global `KYTY_GAME_CONVARS=0` opt-out is not in effect. Original emits none of these, SSR-only retains just two SSR flags. No native rebuild, game asset/save or shader cache edits, nor automatic gameplay or precompile.
+
+**Quick user runtime gate:** compare Original → Combined in *one matched scene*, fully restarting game between switches; check FPS and reflections, particles, contact shadows. If no practical improvement or geometry/artifact regressions, immediately return to Original and retire the bundle. `node --test launcher-electron/tests/*.test.cjs` and actual runner `-DryRun` integration tests validate selection and injection, **not** rendered FPS.
+
 ## Additional prior evidence and retirements
 
 - The current Graphics Lowest and Distance Aggressive overlap at `r_forceViewportHeightForPixelSizeCalc=480` and `sunShadowMaxDistance=60`; the latter does not give extra benefit atop Lowest.

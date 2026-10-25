@@ -36,7 +36,7 @@ function clean(candidate = {}) {
   if (!['standard','low','lowest'].includes(result.quality)) result.quality = 'standard';
   if (!['original','balanced','performance','aggressive'].includes(result.distance_detail)) result.distance_detail = 'original';
   if (!['original','early'].includes(result.distance_tessellation)) result.distance_tessellation = 'original';
-  if (!['original','iterations64'].includes(result.ssr_test)) result.ssr_test = 'original';
+  if (!['original','iterations64','combined'].includes(result.ssr_test)) result.ssr_test = 'original';
   if (!['16:9','21:9','32:9'].includes(result.ratio)) result.ratio = '16:9';
   if (!['dlss','fsr',''].includes(result.upscaler)) result.upscaler = '';
   if (!['auto','K','E'].includes(result.dlss_model)) result.dlss_model = 'auto';
@@ -172,8 +172,10 @@ function buildPlayArgs(root, raw) {
   // Disabled explicitly by default; opt-in source-profile experiment only.
   // Native additionally restricts this to PPSA01341 v1.07 with an exact source line.
   vars.push('KYTY_DISTANCE_TESSELLATION='+s.distance_tessellation);
-  // Safe A/B toggle. The runner appends SSR convars after -Quality and enforces v1.07.
-  vars.push('KYTY_SSR_TEST='+(s.ssr_test === 'iterations64' ? 'ssr64' : 'off'));
+  // One opt-in game-graphics A/B selector. Runner validates v1.07, preserves
+  // -Quality and user overrides, and injects no convars when Original is selected.
+  const graphicsProbe = s.ssr_test === 'iterations64' ? 'ssr64' : s.ssr_test === 'combined' ? 'combined' : 'off';
+  vars.push('KYTY_SSR_TEST='+graphicsProbe);
   // Use chenxiao's native PAGE_GUARD policy by physical RAM capacity (<=20 GiB).
   // Do not force KYTY_READ_GUARD=1 on machines with more than 20 GiB RAM.
   // The failed texture offload experiment is disabled, without destructive discard.

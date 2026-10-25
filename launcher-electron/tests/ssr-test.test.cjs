@@ -23,12 +23,13 @@ test('launcher passes only a gated runner flag and preserves original settings',
 });
 test('runner verifies title/version, appends after Quality, and respects convar opt-out',()=>{
  const runner=fs.readFileSync(path.join(root,'run-windows.ps1'),'utf8');
- assert.match(runner,/\$environment\['KYTY_SSR_TEST'\] -eq 'ssr64'/);
+ assert.match(runner,/\$environment\['KYTY_SSR_TEST'\] -in @\('ssr64', 'combined'\)/);
  assert.match(runner,/\$titleId -eq 'PPSA01341'/);
  assert.match(runner,/01\.007\.000/);
- assert.match(runner,/\$environment\['KYTY_GAME_CONVARS'\], 'r_ssrEnableOverrides=true;r_ssrMaxIterations=64'/);
+ assert.match(runner,/\$probe = 'r_ssrEnableOverrides=true;r_ssrMaxIterations=64'/);
+ assert.match(runner,/\$environment\['KYTY_GAME_CONVARS'\], \$probe/);
  assert.match(runner,/\$\(\$environment\['KYTY_GAME_CONVARS'\]\)" -ne '0'/);
- assert.ok(runner.indexOf("$environment['KYTY_SSR_TEST'] -eq 'ssr64'")>runner.indexOf('foreach ($pair in ($Set'));
+ assert.ok(runner.indexOf("$environment['KYTY_SSR_TEST'] -in @('ssr64', 'combined')")>runner.indexOf('foreach ($pair in ($Set'));
 });
 test('options exposes SSR switch exactly once',()=>{
  const html=fs.readFileSync(path.join(root,'launcher-electron/options.html'),'utf8');

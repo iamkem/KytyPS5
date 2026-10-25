@@ -37,7 +37,7 @@ function fill(){
   set('render-height',s.upscaler==='dlss'||s.upscaler==='fsr'?s.render_dlss:s.render);
   set('game-path',s.game);set('sdk-path',s.streamline);
   set('preset',activePreset(s));
-  $('preset-summary').textContent=activePreset(s)+' · '+(s.upscaler==='dlss'?'DLSS':s.upscaler==='fsr'?'FSR 3':'Game TAA')+' '+(s.upscaler==='dlss'||s.upscaler==='fsr'?s.render_dlss:s.render)+'p · '+(s.quality==='standard'?'Standard (PS5)':s.quality)+' · Distance '+s.distance_detail+' · Tessellation '+s.distance_tessellation+' · SSR '+(s.ssr_test==='iterations64'?'64 (test)':'Original');
+  $('preset-summary').textContent=activePreset(s)+' · '+(s.upscaler==='dlss'?'DLSS':s.upscaler==='fsr'?'FSR 3':'Game TAA')+' '+(s.upscaler==='dlss'||s.upscaler==='fsr'?s.render_dlss:s.render)+'p · '+(s.quality==='standard'?'Standard (PS5)':s.quality)+' · Distance '+s.distance_detail+' · Tessellation '+s.distance_tessellation+' · Graphics Probe '+(s.ssr_test==='combined'?'Combined':s.ssr_test==='iterations64'?'SSR 64':'Original');
   $('output').disabled=false; // chenxiao07: optional native 1080p game output supports DLSS too.
  }finally{syncing=false;}
 }
