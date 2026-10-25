@@ -1,7 +1,6 @@
 #include "loader/gameArgs.h"
 #include "loader/distanceDetail.h"
 #include "loader/distanceTessellation.h"
-#include "loader/modelFading.h"
 #include "loader/systemContent.h"
 
 #include "common/emulatorConfig.h"
@@ -63,26 +62,6 @@ const std::string& ExtraLines() {
 			if (distance != nullptr) {
 				const auto overlay = DistanceConvars(distance);
 				if (!overlay.empty()) add(std::string(overlay));
-			}
-			// Opt-in engine Model/Instance fading probe. Variable names are verified
-			// in the v1.07 eboot and debug menu, but distances/defaults are UNKNOWN.
-			// Only allow the exact audited title/version. Original does not inject
-			// overrides. The game owns visibility; no host Vulkan draw suppression.
-			const char* model_fading = std::getenv("KYTY_MODEL_FADING");
-			if (model_fading != nullptr) {
-				const auto probe = ModelFading::Convars(model_fading);
-				if (!probe.empty()) {
-					std::string title, version;
-					if (Loader::SystemContentParamSfoGetString("TITLE_ID", &title) &&
-					    Loader::SystemContentParamSfoGetString("APP_VER", &version) &&
-					    ModelFading::BuildAdmitted(title, version)) {
-						add(std::string(probe));
-						std::printf("Model/Instance distance fading: EXPERIMENTAL %s (unknown units/defaults)\n",
-						            model_fading);
-					} else {
-						std::printf("Model/Instance distance fading: unsupported title/version; skipped\n");
-					}
-				}
 			}
 		}
 		std::string out;

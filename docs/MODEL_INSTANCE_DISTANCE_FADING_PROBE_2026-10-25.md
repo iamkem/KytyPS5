@@ -1,4 +1,10 @@
-# Model / Instance Distance Fading — controlled engine probes (2026-10-25)
+# Model / Instance Distance Fading — retired NO-GO (2026-10-25)
+
+## Final runtime verdict — do not use these probes
+
+User-tested PPSA01341 v1.07: **Combined caused severe geometry corruption**. The isolated **Model** and **Instance** probes showed **no observed FPS improvement**. This is sufficient to retire this experiment; no reason to keep exposing unsafe scene-level model fading. Following the test, the launcher option and native game-convar injection were removed. Old `model_fading` persisted settings are ignored; `KYTY_MODEL_FADING` is never read by the emulator. `src/loader/modelFading.h` remains only as a fail-closed stub; all modes return no convars. The earlier values documented below are **historical failed tests, NOT recommendations**. The successful no-visible-error Distance Tessellation Early Fade experiment is separate and unchanged; its FPS benefit remains unproven.
+
+## Original experiment (historical, disabled)
 
 ## Evidence and scope
 
