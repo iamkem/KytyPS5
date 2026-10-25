@@ -53,8 +53,18 @@ test('Native pipeline policy has no Stutter Guard hooks; adaptive texture/backin
   const backing = fs.readFileSync(path.join(project, 'src/kernel/memoryAddressSpace.inc'), 'utf8');
   assert.doesNotMatch(pipeline, /MemoryPressure::(?:Next|Pipelines)|last_remade_at|adaptive_policy|ram_pressure/);
   const remainingAdaptiveGates = pipeline.match(/MemoryPressure::Enabled\(\)/g) || [];
-  assert.equal(remainingAdaptiveGates.length, 1, 'only the proven scene-sweep anti-regression gate remains');
-  assert.match(pipeline, /const bool scene_left = !MemoryPressure::Enabled\(\)/);
+  assert.equal(remainingAdaptiveGates.length, 0, 'RAM Safety must not control pipeline sweeping');
+  assert.match(pipeline, /PipelineSweepPolicy::WorldsLeftEnabled\(LocalPlatform::PhysicalMemory\(\)\)/);
+  assert.match(pipeline, /const bool scene_left = sweep_worlds_left && !m_scene_swept/);
+  assert.doesNotMatch(pipeline, /const bool scene_left = [^;]*(?:MemoryPressure::Enabled|RamDietEnabled)/);
+  const worldSweep = fs.readFileSync(path.join(project, 'src/local/pipeline-sweep-policy.h'), 'utf8');
+  assert.match(worldSweep, /physical_ram != 0 && physical_ram <= MaxPhysicalRam/);
+  assert.match(worldSweep, /MaxPhysicalRam = 20 \* GiB/);
+  for (const scenario of ['WorldsLeftEnabled(8 * GiB)', 'WorldsLeftEnabled(16 * GiB)',
+    'WorldsLeftEnabled(20 * GiB)', '!WorldsLeftEnabled(24 * GiB)', '!WorldsLeftEnabled(40 * GiB)',
+    '!WorldsLeftEnabled(0)']) {
+    assert.ok(worldSweep.includes(scenario), `${scenario} checked at native compile time`);
+  }
   assert.doesNotMatch(pipeline, /\bAdaptive pipelines:|const bool emergency\s*=/);
   assert.doesNotMatch(header, /last_remade_at/);
   assert.doesNotMatch(pressure, /(?:struct PipelinePolicy|constexpr PipelinePolicy Pipelines)/);

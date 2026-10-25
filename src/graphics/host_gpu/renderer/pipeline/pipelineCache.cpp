@@ -34,6 +34,7 @@
 #include "device-fault.h"
 #include "local-platform.h"
 #include "memory-pressure.h"
+#include "pipeline-sweep-policy.h"
 #include "slow-log.h"
 #include "startup-progress.h"
 
@@ -2402,14 +2403,14 @@ void PipelineCache::EvictIdlePipelines() {
 		m_scene_swept      = false;
 	}
 	if (!settings.on || flip % CheckFlips != 0) return;
-	// RAM Safety no longer tunes pipeline eviction age, batch size, remake
-	// cooldown or memory-pressure triggers. Keep the independent RAM Diet/VRAM
-	// policy and preserve scene-sweep suppression below as an anti-regression gate.
+	// RAM Safety does not control driver pipeline eviction. The RAM capacity gate
+	// for world sweeps is independent of RAM Safety and RAM Diet: >20 GiB hosts
+	// keep previous-world pipelines rather than remaking them on return.
+	// Existing idle eviction on RAM Diet / VRAM pressure stays unchanged.
 	const auto idle_horizon = settings.idle;
 	const size_t max_evictions = MaxEvictions;
-	// Preserve the old RAM Safety scene-sweep suppression: restoring these
-	// mass evictions would recreate the stutter regression seen before Stage 4.
-	const bool scene_left = !MemoryPressure::Enabled() && !m_scene_swept &&
+	static const bool sweep_worlds_left = PipelineSweepPolicy::WorldsLeftEnabled(LocalPlatform::PhysicalMemory());
+	const bool scene_left = sweep_worlds_left && !m_scene_swept &&
 	                        now - m_scene_since >= SceneSettle;
 	uint64_t video = 0, budget = 0;
 	const bool known = m_graphics.QueryLocalVideoMemory(&video, &budget);
@@ -2432,8 +2433,8 @@ void PipelineCache::EvictIdlePipelines() {
 	}
 	// Upstream issue #85: if idle-evicted pipelines repeatedly have to be remade,
 	// keep them for this session instead of repeatedly stalling gameplay. Respect
-	// KYTY_PIPELINE_EVICT=2's deliberate stress-test mode, without altering RAM
-	// Safety's independent scene-sweep suppression or RAM Diet cleanup above.
+	// KYTY_PIPELINE_EVICT=2's deliberate stress-test mode, without altering the
+	// independent RAM-capacity world-sweep gate or RAM Diet cleanup above.
 	constexpr uint64_t MinIdleSample = 512;
 	if (m_evict_pressure && !settings.always && !m_idle_evict_off) {
 		const auto idle_evicted = g_pipeline_evictions.evicted.load(std::memory_order_relaxed) -
