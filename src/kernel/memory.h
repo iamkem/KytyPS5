@@ -208,6 +208,9 @@ void                   InstallGpuResources(Graphics::GpuResourceManager* resourc
 // Windows with guard pages: the pages read back lately that were not for a while get guards again (the render thread's,
 // once a frame; GuestAddressSpace::CoolHotReads).
 void CoolHotReads();
+// Windows: before optional game-engine free-block discard, drop any hot-read
+// locks associated with these backing-view pages. No-op on other platforms.
+void DropHotReadsBacking(uint64_t backing, uint64_t size);
 
 int KYTY_SYSV_ABI KernelMapNamedFlexibleMemory(void** addr_in_out, size_t len, int prot, int flags,
                                                const char* name);

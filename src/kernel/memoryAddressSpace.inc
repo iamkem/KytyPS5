@@ -1994,6 +1994,26 @@ public:
 		}
 		LiveCounters::Add(LiveCounters::ReadHotCools, cooled);
 	}
+
+	// Before the game allocator's opt-in free-block discard, release readback
+	// backing locks in this range. Leaving a locked page behind would prevent
+	// Windows from reclaiming it; stale hot-read entries must not retain it.
+	void DropHotBacking(uint64_t backing, uint64_t size) {
+		constexpr uint64_t Page = 0x1000;
+		if (size == 0 || backing > UINT64_MAX - size) return;
+		const auto begin = reinterpret_cast<uint8_t*>(backing & ~(Page - 1));
+		const auto end = reinterpret_cast<uint8_t*>(backing + size);
+		std::lock_guard lock(m_hot_mutex);
+		if (m_hot_locks.empty() || m_hot_locks.lower_bound(begin) == m_hot_locks.lower_bound(end)) return;
+		for (auto it = m_hot.begin(); it != m_hot.end();) {
+			if (it->second.backing >= begin && it->second.backing < end) {
+				UnlockHotBacking(it->second.backing);
+				it = m_hot.erase(it);
+			} else {
+				++it;
+			}
+		}
+	}
 #endif
 
 	bool MapBacking(uint64_t vaddr, uint64_t size, uint64_t backing_offset,

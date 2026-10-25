@@ -45,20 +45,29 @@ constexpr uint64_t PageSize = 0x4000, CaveOffset = 0x8000000 + 4 * PageSize;
 
 enum class Mode { Off, Count, Walk, GiveBack };
 
-// KYTY_ENGINE_FREE=giveback|walk|count|0 (default: giveback with 20 GiB of RAM or less on Windows, where the RAM the
-// engine's free blocks hold presses on the rest; off with more).
+// KYTY_ENGINE_FREE=giveback|walk|count|0 (fork default: OFF on every RAM size).
+// Stage B remains an opt-in experiment: it discards guest backing pages, and
+// sparse file-backed guest memory has not been validated for safe discards.
+// Never enable GiveBack when KYTY_BACKING_FILE requests sparse file backing.
 Mode GetMode() {
 	static const Mode mode = [] {
 		if (const char* value = std::getenv("KYTY_ENGINE_FREE"); value != nullptr && *value != '\0') {
 			const std::string_view text = value;
-			return text == "count"                    ? Mode::Count
-			       : text == "walk"                   ? Mode::Walk
-			       : text == "giveback" || text == "1" ? Mode::GiveBack
-			                                           : Mode::Off;
-		}
+			if (text == "count") return Mode::Count;
+			if (text == "walk") return Mode::Walk;
+			if (text == "giveback" || text == "1") {
 #if defined(_WIN32)
-		if (const auto ram = LocalPlatform::PhysicalMemory(); ram != 0 && ram <= (uint64_t {20} << 30u)) return Mode::GiveBack;
+				const char* backing = std::getenv("KYTY_BACKING_FILE");
+				const bool file_backed = backing != nullptr && backing[0] != '\0' &&
+				                         !(backing[0] == '0' && backing[1] == '\0');
+				if (file_backed) {
+					std::puts("Engine frees: BLOCKED: sparse file-backed guest memory is unsafe for DiscardVirtualMemory");
+					return Mode::Off;
+				}
 #endif
+				return Mode::GiveBack;
+			}
+		}
 		return Mode::Off;
 	}();
 	return mode;

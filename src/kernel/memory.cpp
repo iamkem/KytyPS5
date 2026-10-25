@@ -1560,6 +1560,14 @@ void CoolHotReads() {
 #endif
 }
 
+void DropHotReadsBacking(uint64_t backing, uint64_t size) {
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+	if (g_guest_address_space != nullptr) g_guest_address_space->DropHotBacking(backing, size);
+#else
+	(void)backing, (void)size;
+#endif
+}
+
 struct PrtAperture {
 	uint64_t address = 0;
 	uint64_t size    = 0;
