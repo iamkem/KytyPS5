@@ -329,17 +329,6 @@ foreach ($pair in ($Set | ForEach-Object { $_ -split ',(?=[A-Za-z_][A-Za-z0-9_]*
 	elseif ($environment.Contains($key)) { $environment.Remove($key); Remove-Item "env:$key" -ErrorAction SilentlyContinue }
 	else { $environment[$key] = '0' }
 }
-# Graphics A/B probes are opt-in, verified v1.07 only and added AFTER Quality and -Set.
-# Original injects nothing; KYTY_GAME_CONVARS=0 is an explicit master opt-out.
-# Neither probe edits installed assets, shader caches or the native renderer.
-if ($environment['KYTY_SSR_TEST'] -in @('ssr64', 'combined') -and $titleId -eq 'PPSA01341' -and
-    $version -eq 'PPSA01341 01.007.000' -and "$($environment['KYTY_GAME_CONVARS'])" -ne '0') {
-	$probe = 'r_ssrEnableOverrides=true;r_ssrMaxIterations=64'
-	if ($environment['KYTY_SSR_TEST'] -eq 'combined') {
-		$probe += ';r_ssrMaxRayLength=600.0;particleRibbonTessDensity=0.5;r_contactShadowsEnabled=false'
-	}
-	$environment['KYTY_GAME_CONVARS'] = (@($environment['KYTY_GAME_CONVARS'], $probe) | Where-Object { $_ }) -join ';'
-}
 # Above 60 Hz (-Fps120, -Vblank; after -Set, whose engine settings get it too): Demon's Souls steps its game by at
 # least a frame of its target rate each frame (gameMinDeltaTime below 0, its default: 1/60 s, the cinematic mode's
 # 1/30), so frames past that rate played the game that much faster (issue #22: Stonefang 2-3 at 74 fps walked 4.52 m/s,

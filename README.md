@@ -1,6 +1,8 @@
 > [!IMPORTANT]
 > **Personal Windows launcher — Demon's Souls PC.** This fork uses a custom Electron launcher with the installed game's icon, real resolution-based presets, shader cache version management and live precompile progress. Open `launcher.cmd` or build `launcher-electron` with `npm ci` and `npm run build`. The former WPF launcher (`launcher-windows`) and PowerShell launcher UIs have been removed; `run-windows.ps1` and `precompile-windows.ps1` remain as required emulator backends. See [the personalized launcher guide](launcher-electron/README.md).
 >
+> **Current active features and cleanup status:** [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md). Retired graphics experiments, historical launcher variants, and orphan audit scripts are not part of the current runnable tree.
+>
 > [!NOTE]
 > **This fork is tuned for Demon's Souls.** Its renderer, shader and memory paths are optimized for
 > **Demon's Souls (PS5, PPSA01341), game versions 1.07 (01.007.000) and 1.05 (01.005.000)**: both are
