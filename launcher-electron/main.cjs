@@ -10,6 +10,7 @@ const versions=require('./cache-generations.cjs');
 const {ShaderProgress}=require('./shader-progress.cjs');
 const shaderInputs=require('./shader-inputs.cjs');
 const shaderTrial=require('./shader-trial.cjs');
+const sceneBenchmark=require('./scene-benchmark.cjs');
 const {ModManager}=require('./mod-manager.cjs');
 const {DiscordPresence,isConfigured,validConfig,readGamePid}=require('./discord-presence.cjs');
 const {isSteamGameMode,steamShortcut}=require('./steam-integration.cjs');
@@ -25,7 +26,7 @@ function locateProject(start){
   throw Error('Cannot find KytyPS5 installation next to the launcher.');
 }
 const ROOT=process.env.KYTY_PROJECT_ROOT || locateProject(app.isPackaged?path.dirname(process.execPath):path.resolve(__dirname,'..'));
-let mainWindow=null,optionsWindow=null,progressWindow=null,gameProcess=null,optionsSnapshot=null,optionsCommitted=false;
+let mainWindow=null,optionsWindow=null,progressWindow=null,benchmarkWindow=null,benchmarkSession=null,gameProcess=null,optionsSnapshot=null,optionsCommitted=false;
 let idlePresence=null,discordResumeTimer=null,discordClosing=false;
 const discordLogFile=path.join(ROOT,'_Build','run-logs','discord-presence.log');
 function discordLog(event,detail=''){
@@ -142,6 +143,35 @@ function openOptions() {
     mainWindow?.webContents.send('launcher:settings-changed',currentSettings());
   });
 }
+function benchmarkInfo(){
+  const s=benchmarkSession;
+  return {enabled:!!s,mode:s?.mode||'',ready:!!s?.ready&&!!s?.running,
+    active:!!s?.running,probing:!!s?.probing,probeFailed:!!s?.probeFailed,capturing:!!s?.capturing,
+    logPath:s?.logPath||'',folder:s?.folder||'',results:s?.results||[]};
+}
+function sendBenchmarkInfo(){
+  if(benchmarkWindow&&!benchmarkWindow.isDestroyed())
+    benchmarkWindow.webContents.send('launcher:benchmark-status',benchmarkInfo());
+}
+function openBenchmarkWindow(){
+  if(benchmarkWindow&&!benchmarkWindow.isDestroyed()){
+    benchmarkWindow.show();benchmarkWindow.focus();return;
+  }
+  benchmarkWindow=new BrowserWindow({
+    width:492,height:440,minWidth:430,minHeight:370,resizable:true,show:false,
+    backgroundColor:'#faf9f7',title:'Scene Benchmark — KytyPS5',autoHideMenuBar:true,
+    icon:path.join(__dirname,'assets','game.ico'),
+    webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}
+  });
+  benchmarkWindow.loadFile(path.join(__dirname,'benchmark.html'));
+  benchmarkWindow.once('ready-to-show',()=>benchmarkWindow?.show());
+  benchmarkWindow.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+  benchmarkWindow.webContents.on('will-navigate',e=>e.preventDefault());
+  benchmarkWindow.on('close',event=>{
+    if(benchmarkSession?.running){event.preventDefault();benchmarkWindow.minimize();}
+  });
+  benchmarkWindow.on('closed',()=>{benchmarkWindow=null;});
+}
 function startDiscordAgent(settings,gamePid){
   if(!isConfigured(settings)||!gamePid||process.argv.includes('--smoke-ui'))return false;
   const presence=validConfig(settings);
@@ -165,20 +195,29 @@ function startDiscordAgent(settings,gamePid){
     return false;
   }
 }
-function launchCommand(spec,{restore=false,visible=false,onGamePid=null,silentError=false,shaderMode='standard'}={}) {
+function launchCommand(spec,{restore=false,visible=false,onGamePid=null,onGameLog=null,env=null,silentError=false,shaderMode='standard'}={}) {
   const child=spawn(spec.command,spec.args,{cwd:ROOT,windowsHide:!visible,
-    stdio:onGamePid?['ignore','pipe','pipe']:'ignore'});
-  if(onGamePid){
-    let recent='',recognized=false;
+    env:env||process.env,stdio:onGamePid||onGameLog?['ignore','pipe','pipe']:'ignore'});
+  if(onGamePid||onGameLog){
+    let partial='',recognized=false,logBound=false;
     child.stdout.on('data',data=>{
-      if(recognized)return;
-      recent=(recent+data.toString('utf8')).slice(-900);
-      const pid=readGamePid(recent);
-      if(pid){recognized=true;onGamePid(pid);}
+      // Always drain stdout, even once metadata has been found, so that
+      // a quiet UI does not block the -Follow PowerShell runner.
+      if((recognized||!onGamePid)&&(logBound||!onGameLog))return;
+      const lines=(partial+data.toString('utf8')).split(/\r?\n/);
+      partial=lines.pop().slice(-4096);
+      for(const line of lines){
+        if(onGameLog&&!logBound&&onGameLog(line)===true)logBound=true;
+        if(onGamePid&&!recognized){
+          const pid=readGamePid(line);
+          if(pid){recognized=true;onGamePid(pid);}
+        }
+      }
     });
     child.stderr.on('data',()=>{});
   }
   child.on('error',err=>{
+    if(benchmarkSession){sceneBenchmark.end(benchmarkSession);sendBenchmarkInfo();}
     gameProcess=null;discordLog('GAME_START_ERROR',err.message);
     if(!silentError){
       resumeIdlePresence();mainWindow?.show();mainWindow?.webContents.send('launcher:game-exit');
@@ -230,21 +269,66 @@ app.whenReady().then(()=>{
       spec=logic.buildPlayArgs(ROOT,cfg);
     }
     if(!steam)logic.saveSettings(ROOT,cfg); // Steam auto-launch is read-only for user settings.
+    // A fresh, session-local command file is inherited only by this one runner.
+    // Nothing is measured until the player clicks the benchmark window button.
+    const activeBench=!steam&&cfg.scene_benchmark?sceneBenchmark.create(ROOT,cfg.shader_mode):null;
+    benchmarkSession=activeBench;
+    // Do not leak a benchmark hook inherited from the caller into normal Play.
+    const childEnv={...process.env};
+    delete childEnv.KYTY_LIVE_FILE;
+    if(activeBench){
+      // Explicit runner switch overrides both inherited env and launch config.
+      // Normal Play (including Steam) always forces live-control completely off.
+      const index=spec.args.indexOf('-DisableLiveControl');
+      if(index>=0)spec.args.splice(index,1);
+      spec.args.push('-LiveControlFile',activeBench.commandFile);
+      childEnv.KYTY_LIVE_FILE=activeBench.commandFile;
+    }
     stopIdlePresence();
-    const child=launchCommand(spec,{restore:!steam,silentError:steam,shaderMode:cfg.shader_mode,onGamePid:isConfigured(cfg)?pid=>{
+    const child=launchCommand(spec,{restore:!steam,silentError:steam,shaderMode:cfg.shader_mode,
+      env:childEnv,
+      onGameLog:activeBench?text=>{
+        if(!activeBench.logPath&&sceneBenchmark.bindLog(activeBench,text,ROOT)){
+          sendBenchmarkInfo();
+          sceneBenchmark.probe(activeBench).then(()=>sendBenchmarkInfo())
+            .catch(error=>{activeBench.probeFailed=true;console.warn('BENCHMARK_PROBE_FAILED',error.message);sendBenchmarkInfo();});
+          sendBenchmarkInfo();
+          return true;
+        }
+        return false;
+      }:null,
+      onGamePid:isConfigured(cfg)?pid=>{
       discordLog('GAME_PID_DETECTED',String(pid));
       startDiscordAgent(cfg,pid);
     }:null});
     gameProcess=child;
     child.on('exit',()=>{
       if(gameProcess===child)gameProcess=null;
+      if(activeBench){sceneBenchmark.end(activeBench);sendBenchmarkInfo();}
       discordLog('GAME_EXIT',steam?'Ending Steam-launched game session':'Restoring launcher activity after helper cleanup');
       if(steam)app.quit();else resumeIdlePresence();
     });
     if(steam)child.on('error',()=>{app.quit();});
     mainWindow?.hide();
+    if(activeBench)openBenchmarkWindow();
     return true;
   };
+  ipcMain.handle('launcher:benchmark-status',()=>benchmarkInfo());
+  ipcMain.handle('launcher:benchmark-probe',async event=>{
+    if(!benchmarkWindow||event.sender!==benchmarkWindow.webContents||!gameProcess||
+       !benchmarkSession?.running||benchmarkSession.probing||benchmarkSession.capturing)
+      throw Error('No active benchmark session is available for reconnect.');
+    const s=benchmarkSession;
+    try{return await sceneBenchmark.probe(s);}
+    finally{sendBenchmarkInfo();}
+  });
+  ipcMain.handle('launcher:benchmark-capture',async event=>{
+    if(!benchmarkWindow||event.sender!==benchmarkWindow.webContents||!gameProcess||!benchmarkSession?.running)
+      throw Error('Start the game with Scene Benchmark enabled in Options first.');
+    const session=benchmarkSession;
+    try{return await sceneBenchmark.capture(session);}
+    finally{sendBenchmarkInfo();}
+  });
   ipcMain.handle('launcher:play',(_event,data)=>{
     if(steamGameMode)throw Error('Steam session owns game launch');
     return startGame(data);
@@ -619,6 +703,23 @@ app.whenReady().then(()=>{
         catch(e){console.warn('SCREENSHOT_UNAVAILABLE shader progress: '+e.message);}
         console.log('ELECTRON_PROGRESS_WINDOW_PASS '+JSON.stringify(progressChecks));
         progressWindow.close();
+        // G2 measurement window smoke is UI-only: no game, no live session,
+        // no shader/caches/save mutation and no synthetic command execution.
+        openBenchmarkWindow();
+        await waitLoad(benchmarkWindow);
+        const benchUi=await benchmarkWindow.webContents.executeJavaScript(
+          "(async()=>({capture:!!document.querySelector('#bench-measure'),"+
+          "disabled:document.querySelector('#bench-measure').disabled,"+
+          "mode:!!document.querySelector('#bench-mode'),"+
+          "bridge:typeof window.launcher.benchmarkCapture==='function',"+
+          "status:await window.launcher.benchmarkStatus()}))()");
+        if(!benchUi.capture||!benchUi.disabled||!benchUi.mode||!benchUi.bridge||benchUi.status.enabled)
+          throw Error('Scene Benchmark UI smoke failed: '+JSON.stringify(benchUi));
+        console.log('ELECTRON_SCENE_BENCHMARK_UI_PASS '+JSON.stringify(benchUi));
+        try{fs.writeFileSync(path.join(reviewDir,'review-scene-benchmark.png'),
+          (await benchmarkWindow.webContents.capturePage()).toPNG());}
+        catch(e){console.warn('SCREENSHOT_UNAVAILABLE benchmark: '+e.message);}
+        benchmarkWindow.close();
         // Real renderer IPC: select a graphics preset, confirm its JSON and then Cancel.
         const original=currentSettings();
         const requested=original.quality==='standard' ? 'Ultra Performance' : 'Quality';

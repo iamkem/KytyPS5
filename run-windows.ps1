@@ -91,6 +91,9 @@ param(
 	[switch]$Prompt,
 	[switch]$Follow,
 	[switch]$DryRun,
+	# Launcher-owned live measurements: an explicit file or a forced OFF switch.
+	[string]$LiveControlFile = '',
+	[switch]$DisableLiveControl,
 	# Separate, opt-in 0x3 shader generation. Never use the normal shader/cache maintenance path.
 	[switch]$ShaderFeatureTrial
 )
@@ -342,6 +345,16 @@ foreach ($pair in ($Set | ForEach-Object { $_ -split ',(?=[A-Za-z_][A-Za-z0-9_]*
 	if ($value) { $environment[$key] = $value }
 	elseif ($environment.Contains($key)) { $environment.Remove($key); Remove-Item "env:$key" -ErrorAction SilentlyContinue }
 	else { $environment[$key] = '0' }
+}
+if ($LiveControlFile -and $DisableLiveControl) { throw 'Select only one of -LiveControlFile and -DisableLiveControl' }
+if ($LiveControlFile) {
+	if (![IO.Path]::IsPathRooted($LiveControlFile) -or !(Test-Path -LiteralPath $LiveControlFile -PathType Leaf)) {
+		throw '-LiveControlFile requires an existing absolute command-file path'
+	}
+	$environment['KYTY_LIVE_FILE'] = $LiveControlFile
+} elseif ($DisableLiveControl) {
+	$environment.Remove('KYTY_LIVE_FILE')
+	Remove-Item Env:KYTY_LIVE_FILE -ErrorAction SilentlyContinue
 }
 if ($ShaderFeatureTrial) {
 	foreach ($key in @('KYTY_SHADER_WARMUP_FILE', 'KYTY_LANE_LOCAL_COOP', 'KYTY_TABLE_SLOTS_AT_USE', 'KYTY_NATIVE_FLOAT_MIN_MAX', 'KYTY_STATIC_PIPELINE_CACHE')) {

@@ -8,7 +8,7 @@ const defaults = Object.freeze({
   redzone: true, cheats: false, ecores: false, fps120: false, render: 1440,
   ratio: '16:9', quality: 'standard', distance_detail: 'original', distance_tessellation: 'original', vsync: false, hdr: false, framegen: 0,
   hud: 1, streamline: '', safegpu: false, upscaler: 'dlss', render_dlss: 1152,
-  fsr: false, output: '4k', shader_mode: 'standard', lowlatency: true, present_direct: false, antilag: false,
+  fsr: false, output: '4k', shader_mode: 'standard', scene_benchmark: false, lowlatency: true, present_direct: false, antilag: false,
   fps30: false, dlss_model: 'auto', gpu: '',
   ram_diet: true, ram16_backing: true, ram_safety: true, vram_budget_mb: 0,
   discord_presence: false, discord_app_id: '', discord_large_image: ''
@@ -20,7 +20,7 @@ const presets = Object.freeze({
   Balanced: Object.freeze({render_dlss:1152,quality:'low',fsr:false,output:'4k',upscaler:'dlss'}),
   Quality: Object.freeze({render_dlss:1440,quality:'standard',fsr:false,output:'4k',upscaler:'dlss'})
 });
-const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing','ram_safety','fps30','discord_presence'];
+const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing','ram_safety','fps30','discord_presence','scene_benchmark'];
 const numericKeys = ['language','render','render_dlss','framegen','hud','vram_budget_mb'];
 function clean(candidate = {}) {
   if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) throw Error('Invalid settings object');
@@ -131,6 +131,8 @@ function buildPlayArgs(root, raw, {inspectTrial = require('./shader-trial.cjs').
   const args = ['-NoProfile','-ExecutionPolicy','Bypass','-File',path.join(root,'run-windows.ps1'),
     '-Follow','-Exe',exe,'-Game',s.game,'-Width',width,'-Height',height,'-Language',String(s.language)];
   if (s.shader_mode === 'experimental') args.push('-ShaderFeatureTrial');
+  // No inherited/configured native live-control command source in ordinary or Steam Play.
+  args.push('-DisableLiveControl');
   if (s.fullscreen) { args.push('-Fullscreen'); if (s.aspect && s.ratio === '16:9') args.push('-AspectFit'); }
   if (!s.redzone) args.push('-NoRedZone');
   if (s.fps120) args.push('-Fps120');
