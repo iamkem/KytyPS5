@@ -4,8 +4,9 @@
   <div class="benchmark-heading"><div><small>KYTYPS5 · G2 FRAME ANALYSIS</small><h1>Scene Benchmark</h1></div><span id="bench-mode">Not active</span></div>
   <p class="benchmark-help">Stand at the same spot and camera angle in both shader modes. Let warmup finish. No automated input, shader rebuild or save changes.</p>
   <div class="benchmark-state" id="bench-state" role="status">Checking active session…</div>
-  <div class="benchmark-actions"><button id="bench-measure" disabled>Measure 15 seconds</button><span id="bench-hint">Switch back to the game within 5 seconds after clicking.</span></div>
-  <div class="benchmark-report"><strong>Latest measurement</strong><div id="bench-result" class="benchmark-empty">No samples yet.</div></div>
+  <div class="benchmark-actions"><button id="bench-measure" disabled>Measure FPS (15s)</button><button id="bench-census" disabled>Profile CPU (5s)</button></div><p id="bench-hint" class="benchmark-help">Return to the game within 5 seconds after clicking. Keep the camera still; run one measurement at a time.</p>
+  <div class="benchmark-report"><strong>Latest FPS measurement</strong><div id="bench-result" class="benchmark-empty">No samples yet.</div></div>
+  <div class="benchmark-report"><strong>Latest CPU census (5s)</strong><div id="bench-census-result" class="benchmark-empty">No CPU census yet.</div></div>
   <div class="benchmark-path">Results: <span id="bench-folder">—</span></div>
   <div class="benchmark-bottom"><span>Use 3 samples per mode. A/B/B/A is best.</span><button id="bench-close">Close panel</button></div>
 </main><script src="benchmark.js"></script></body></html>

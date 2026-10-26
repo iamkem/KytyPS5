@@ -1,22 +1,49 @@
 'use strict';
 const $=id=>document.getElementById(id);
 let current=null,measuring=false;
+const kindNames=['Dispatch','Draw','Native XPR','Dispatch phase','GPU wait','Readback wait','Sync download','Graphics programs','Native gather','PM4 QueueRun','SRT interpreter','Command sync','Draw phase','Barrier'];
+function censusName(e){
+ if(e.kind!==12)return kindNames[e.kind]||'Kind '+e.kind;
+ const phase=parseInt(e.b.slice(-2),16);
+ const suffix=e.a==='000000000007ab1e'?'Table draw':e.a==='000000000007ab1f'?'Table dispatch':'Draw phase';
+ const phases={0:'inclusive',1:'evaluate + gather',2:'set',3:'BDA / blocks',4:'emission',5:'buffer resolve',6:'range reproof',7:'set validation',9:'arguments + indices',10:'argument miss',11:'index miss'};
+ return suffix+' · '+(phases[phase]||'phase '+phase);
+}
 function metric(v,digits=2){return Number.isFinite(v)?v.toFixed(digits):'—';}
 function draw(s){
  current=s;
  const mode=s.mode==='experimental'?'Experimental (0x3)':s.mode==='standard'?'Standard (0x0)':'Not active';
  $('bench-mode').textContent=mode;
  $('bench-folder').textContent=s.folder||'—';
- $('bench-measure').textContent=s.probeFailed&&!s.ready?'Retry connection':'Measure 15 seconds';
- $('bench-measure').disabled=measuring||(!s.ready&&!s.probeFailed)||!s.active;
+ $('bench-measure').textContent=s.probeFailed&&!s.ready?'Retry connection':'Measure FPS (15s)';
+ $('bench-measure').disabled=measuring||s.capturing||(!s.ready&&!s.probeFailed)||!s.active;
+ $('bench-census').disabled=measuring||s.capturing||!s.ready||!s.active;
  $('bench-close').textContent=s.active?'Minimize panel':'Close panel';
  $('bench-state').textContent=!s.active?'Game session has ended. Start a new benchmark-enabled Play for another sample.':
    measuring?'Measuring… switch focus to the game now.':
    s.probeFailed?'Live-control is not responding yet. Click Retry connection when gameplay is ready.':
    !s.ready?'Waiting for the matching game log and native readiness handshake…':
    'Ready. Move to your benchmark scene, then click Measure.';
+ const lastCensus=s.censusResults?.at(-1);
+ const censusBox=$('bench-census-result');
+ censusBox.replaceChildren();
+ if(lastCensus){
+  const heading=document.createElement('div');
+  heading.textContent=lastCensus.entryCount+' timed scopes · '+lastCensus.frames+' game frames';
+  censusBox.append(heading);
+  const list=document.createElement('ol');list.className='benchmark-census-list';
+  for(const entry of lastCensus.topEntries.slice(0,8)){
+   const item=document.createElement('li');
+   item.textContent=censusName(entry)+' · '+metric(entry.ms_per_frame,3)+' ms/frame · '+metric(entry.calls_per_frame,1)+' calls/frame';
+   list.append(item);
+  }
+  censusBox.append(list);
+  const note=document.createElement('p');note.className='benchmark-census-note';
+  note.textContent='Inclusive CPU wall timings; nested scopes overlap. See census-*.json for all shader/phase keys.';
+  censusBox.append(note);
+ }else censusBox.textContent='No CPU census for this session.';
  const last=s.results?.at(-1);
- if(!last){$('bench-result').replaceChildren();$('bench-result').textContent='No samples yet for this session.';return;}
+ if(!last){$('bench-result').replaceChildren();$('bench-result').textContent='No FPS samples yet for this session.';return;}
  $('bench-result').replaceChildren();
  const grid=document.createElement('div');grid.className='benchmark-grid';
  for(const [label,value] of [
@@ -38,17 +65,18 @@ function draw(s){
 }
 window.launcher.onBenchmarkStatus(draw);
 window.launcher.benchmarkStatus().then(draw).catch(e=>$('bench-state').textContent=e.message);
-$('bench-measure').addEventListener('click',async()=>{
+async function startMeasurement(kind){
  if(measuring)return;
  measuring=true;
- $('bench-measure').disabled=true;
- $('bench-state').textContent='Starting in 5 seconds — return focus to the game. Keep camera still for 15 seconds.';
+ $('bench-measure').disabled=true;$('bench-census').disabled=true;
+ $('bench-state').textContent=kind==='census'?'CPU phase profiling starts in 5 seconds; return to the game for 5 seconds.':'FPS measurement starts in 5 seconds; return to the game for 15 seconds.';
  let errorMessage='';
  try{
   if(current?.probeFailed&&!current?.ready){
     await window.launcher.benchmarkProbe();
   }else{
-    await window.launcher.benchmarkCapture();
+    if(kind==='census')await window.launcher.benchmarkCensus();
+    else await window.launcher.benchmarkCapture();
   }
  }catch(error){errorMessage=error.message;}
  finally{
@@ -57,5 +85,7 @@ $('bench-measure').addEventListener('click',async()=>{
   catch(error){errorMessage=error.message;}
   if(errorMessage)$('bench-state').textContent=errorMessage;
  }
-});
+}
+$('bench-measure').addEventListener('click',()=>startMeasurement('fps'));
+$('bench-census').addEventListener('click',()=>startMeasurement('census'));
 $('bench-close').addEventListener('click',()=>window.close());

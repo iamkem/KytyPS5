@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('launcher', Object.freeze({
   shaderTrialStatus: game => ipcRenderer.invoke('launcher:shader-trial-status',game),
   benchmarkStatus: () => ipcRenderer.invoke('launcher:benchmark-status'),
   benchmarkCapture: () => ipcRenderer.invoke('launcher:benchmark-capture'),
+  benchmarkCensus: () => ipcRenderer.invoke('launcher:benchmark-census'),
   benchmarkProbe: () => ipcRenderer.invoke('launcher:benchmark-probe'),
   onBenchmarkStatus: callback => ipcRenderer.on('launcher:benchmark-status',(_event,result)=>callback(result)),
   showShaderProgress: () => ipcRenderer.invoke('launcher:shader-progress-window'),

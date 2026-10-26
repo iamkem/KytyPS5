@@ -181,6 +181,11 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 .benchmark-actions{display:flex;align-items:center;gap:10px}
 .benchmark-actions button{border:1px solid #967f5b;background:#eee6d9;color:#4f3c28;padding:10px 12px;white-space:nowrap}
 .benchmark-actions button:disabled{opacity:.5;cursor:default}
+.benchmark-actions{flex-wrap:wrap}
+.benchmark-screen .benchmark-shell{gap:9px}
+.benchmark-census-list{margin:6px 0 0;padding-left:17px;font-size:10px;max-height:160px;overflow:auto}
+.benchmark-census-list li{padding:2px 0}
+.benchmark-census-note{margin:5px 0 0;font-size:10px;color:#8e8174;line-height:1.4}
 #bench-hint{font-size:10px;color:#827a6e;line-height:1.5}
 .benchmark-report{flex:1;border:1px solid #e0dbd2;background:#fff;padding:10px}
 .benchmark-report>strong{display:block;margin-bottom:9px;font-size:11px}

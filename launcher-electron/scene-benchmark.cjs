@@ -37,6 +37,24 @@ function readMeasurement(line,id,expectedLabel=null) {
   return result;
 }
 
+// LIVE_CENSUS emits one header followed by per-key inclusive timings and LIVE_DONE.
+// Preserve hexadecimal keys to let offline analysis decode Table XPR's synthetic phases.
+function parseCensusHeader(line,id){
+  const m=line.match(/^LIVE_CENSUS id=(\d+) frames=(\d+) base=([0-9a-fA-F]{1,16}) exe=(.+)$/);
+  if(!m||m[1]!==String(id))return null;
+  const frames=Number(m[2]);
+  if(!Number.isSafeInteger(frames)||frames<1||!m[4].trim())return null;
+  return {frames,base:m[3].toLowerCase(),exe:m[4].trim()};
+}
+function parseCensusEntry(line,id){
+  const m=line.match(/^LIVE_CENSUS_ENTRY id=(\d+) kind=(\d+) a=([0-9a-fA-F]{16}) b=([0-9a-fA-F]{16}) calls_per_frame=(\d+(?:\.\d+)?) ms_per_frame=(\d+(?:\.\d+)?)$/);
+  if(!m||m[1]!==String(id))return null;
+  const kind=Number(m[2]),calls=Number(m[5]),ms=Number(m[6]);
+  if(!Number.isInteger(kind)||kind<0||kind>13||!Number.isFinite(calls)||!Number.isFinite(ms)||
+    calls<0||ms<0||calls>1e8||ms>1e5)return null;
+  return {kind,a:m[3].toLowerCase(),b:m[4].toLowerCase(),calls_per_frame:calls,ms_per_frame:ms};
+}
+
 function parseLogNotice(text,root,mode) {
   const expected=mode==='experimental'?
     path.join(root,'_Build','shader-feature-trial','run-logs'):path.join(root,'_Build','run-logs');
@@ -62,7 +80,7 @@ function create(root, mode) {
   fs.writeFileSync(commandFile,'id 0\n','utf8');
   return {
     mode,folder,commandFile,logPath:null,running:true,ready:false,probing:false,probeFailed:false,capturing:false,number:0,
-    startedAt:Date.now(),lastId:0,results:[]
+    startedAt:Date.now(),lastId:0,results:[],censusResults:[],capturingKind:null
   };
 }
 
@@ -110,7 +128,7 @@ function waitForDone(session,id,{timeoutMs=5000,interval=250}={}) {
 }
 
 async function probe(session,{retries=24,delay=2500}={}) {
-  if(!session||!session.logPath||!session.running||session.probing)return false;
+  if(!session||!session.logPath||!session.running||session.probing||session.capturing)return false;
   session.probing=true;session.probeFailed=false;
   try{
   for(let i=0;i<retries&&session.running;i++){
@@ -140,22 +158,24 @@ function readNew(file,start,end) {
 
 function capture(session, {seconds=15, sleep=5, interval=400, timeoutMs=44000}={}) {
   if(!session||!session.running)throw Error('Game is not active.');
-  if(session.capturing)throw Error('A frame measurement is already running.');
+  if(session.capturing||session.probing)throw Error('Another measurement or readiness handshake is running.');
   if(!session.ready||!session.logPath||!fs.existsSync(session.logPath))throw Error('Native live-control handshake is not ready yet.');
   if(seconds<1||seconds>MAX_SECONDS||sleep<0||sleep>10)throw Error('Unsupported benchmark duration.');
   if(session.mode!=='standard'&&session.mode!=='experimental')throw Error('Invalid session mode.');
-  session.capturing=true;
+  session.capturing=true;session.capturingKind='measure';
   session.number++;
   const label=session.mode==='experimental'?'trial'+session.number:'std'+session.number;
   const id=Math.max(Date.now(),session.lastId+1);
   session.lastId=id;
   const log=session.logPath;
-  const initial=fs.statSync(log).size;
+  let initial;
+  try{initial=fs.statSync(log).size;}
+  catch(error){session.capturing=false;session.capturingKind=null;throw error;}
   const data='sleep '+sleep+'\nmeasure '+seconds+' '+label+'\n';
   // The only writable side effect outside the report is the session-local
   // native command file; commands cannot modify game state.
   try{publishCommand(session,id,data);}
-  catch(error){session.capturing=false;throw error;}
+  catch(error){session.capturing=false;session.capturingKind=null;throw error;}
   return new Promise((resolve,reject)=>{
     let offset=initial, tail='', measure=null, counters=null;
     let done=false;
@@ -182,7 +202,7 @@ function capture(session, {seconds=15, sleep=5, interval=400, timeoutMs=44000}={
               const report=path.join(session.folder,'results.jsonl');
               fs.appendFileSync(report,JSON.stringify(result)+'\n','utf8');
               session.results.push(result);
-              done=true;clearInterval(timer);session.capturing=false;
+              done=true;clearInterval(timer);session.capturing=false;session.capturingKind=null;
               resolve(result);
               return;
             }
@@ -192,7 +212,78 @@ function capture(session, {seconds=15, sleep=5, interval=400, timeoutMs=44000}={
         if(!session.running||session.logPath!==log)throw Error('Game session ended before completing a sample.');
       }catch(error){
         if(session.running){session.ready=false;session.probeFailed=true;}
-        done=true;clearInterval(timer);session.capturing=false;reject(error);
+        done=true;clearInterval(timer);session.capturing=false;session.capturingKind=null;reject(error);
+      }
+    },interval);
+  });
+}
+
+function census(session,{seconds=5,sleep=5,interval=400,timeoutMs=32000}={}){
+  if(!session||!session.running)throw Error('Game is not active.');
+  if(session.capturing||session.probing)throw Error('Another measurement or readiness handshake is running.');
+  if(!session.ready||!session.logPath||!fs.existsSync(session.logPath))
+    throw Error('Native live-control handshake is not ready yet.');
+  if(seconds!==5||sleep<0||sleep>10)throw Error('Only bounded 5-second CPU census is supported.');
+  session.capturing=true;session.capturingKind='census';
+  const id=Math.max(Date.now(),session.lastId+1);
+  session.lastId=id;
+  const log=session.logPath;
+  let initial;
+  try{initial=fs.statSync(log).size;}
+  catch(error){session.capturing=false;session.capturingKind=null;throw error;}
+  try{publishCommand(session,id,'sleep '+sleep+'\ncensus '+seconds+'\n');}
+  catch(error){session.capturing=false;session.capturingKind=null;throw error;}
+  return new Promise((resolve,reject)=>{
+    let offset=initial,tail='',header=null,entries=[],done=false;
+    const keys=new Set();
+    const started=Date.now();
+    const timer=setInterval(()=>{
+      try{
+        if(done)return;
+        if(Date.now()-started>timeoutMs)throw Error('CPU census timed out.');
+        const size=fs.statSync(log).size;
+        if(size<offset)throw Error('Game log changed while profiling.');
+        const bytes=Math.min(size-offset,MAX_INCREMENT);
+        if(bytes){
+          const lines=(tail+readNew(log,offset,offset+bytes)).split(/\r?\n/);
+          offset+=bytes;tail=lines.pop().slice(-4096);
+          for(const line of lines){
+            if(line.startsWith('LIVE_ERROR id='+id+' '))throw Error('Native CPU census reported an error.');
+            if(line.startsWith('LIVE_CENSUS id='+id+' ')){
+              if(header)throw Error('Duplicate CPU census header.');
+              header=parseCensusHeader(line,id);
+              if(!header)throw Error('Invalid CPU census header.');
+            }
+            if(line.startsWith('LIVE_CENSUS_ENTRY id='+id+' ')){
+              if(!header||entries.length>=32768)throw Error('Invalid CPU census entry count.');
+              const entry=parseCensusEntry(line,id);
+              if(!entry)throw Error('Invalid CPU census entry.');
+              const key=entry.kind+':'+entry.a+':'+entry.b;
+              if(keys.has(key))throw Error('Duplicate CPU census key.');
+              keys.add(key);
+              entries.push(entry);
+            }
+            if(line.trim()==='LIVE_DONE id='+id){
+              if(!header||header.frames<2||entries.length===0)throw Error('CPU census completed without usable instrumented frames.');
+              const report={schemaVersion:1,type:'census',id,mode:session.mode,label:session.mode==='experimental'?'trial-census':'std-census',
+                durationSeconds:seconds,pairedMeasurementId:session.results.at(-1)?.id??null,
+                at:new Date().toISOString(),
+                frames:header.frames,base:header.base,exe:header.exe,entryCount:entries.length,
+                logPath:log,topEntries:[...entries].sort((a,b)=>b.ms_per_frame-a.ms_per_frame).slice(0,12)};
+              // Raw entries are retained for accurate per-shader offline research.
+              fs.writeFileSync(path.join(session.folder,'census-'+id+'.json'),
+                JSON.stringify({...report,entries},null,2)+'\n','utf8');
+              fs.appendFileSync(path.join(session.folder,'census-results.jsonl'),JSON.stringify(report)+'\n','utf8');
+              session.censusResults.push(report);
+              done=true;clearInterval(timer);session.capturing=false;session.capturingKind=null;
+              resolve(report);return;
+            }
+          }
+        }
+        if(!session.running||session.logPath!==log)throw Error('Game session ended before CPU census completed.');
+      }catch(error){
+        if(session.running){session.ready=false;session.probeFailed=true;}
+        done=true;clearInterval(timer);session.capturing=false;session.capturingKind=null;reject(error);
       }
     },interval);
   });
@@ -202,4 +293,4 @@ function end(session) {
   if(session)session.running=false;
 }
 
-module.exports={create,bindLog,parseLogNotice,readMeasurement,publishCommand,probe,capture,end};
+module.exports={create,bindLog,parseLogNotice,readMeasurement,parseCensusHeader,parseCensusEntry,publishCommand,probe,capture,census,end};

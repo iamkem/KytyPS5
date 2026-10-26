@@ -116,7 +116,7 @@ test('missing handshake, parallel capture and game exit are safely rejected',asy
   assert.throws(()=>b.capture(f.s),/handshake/);
   f.s.ready=true;
   const a=b.capture(f.s,{seconds:15,sleep:0,interval:35,timeoutMs:500});
-  assert.throws(()=>b.capture(f.s),/already running/);
+  assert.throws(()=>b.capture(f.s),/Another measurement/);
   b.end(f.s);
   await assert.rejects(a,/session ended/);
   assert.equal(f.s.capturing,false);
