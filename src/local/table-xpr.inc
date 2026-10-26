@@ -944,6 +944,7 @@ static uint32_t TableCodeWord(const ShaderRecompiler::IR::TablePlan::Operand& op
 // they make (TableXpr::words, the set's key) and the pixel stage's LOD statistics words. False: something unmapped.
 bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const uint32_t>, 2> user_data) {
 	LiveCensus::Scope g2c(LiveCensus::DrawPhase, 0x7ab20, 1); // Eval only; the caller's phase 1 also includes Gather.
+	const auto g2e_setup = (LiveCensus::g_on.load(std::memory_order_relaxed) && LiveCensus::g_render) ? __rdtsc() : 0;
 	auto&      table     = OwnTable();
 	const auto stages    = pair.programs[1] != nullptr ? 2u : 1u;
 	auto&      resources = m_context.GetGpuResources();
@@ -956,6 +957,8 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 	words.clear();
 	table.lod_stats.clear();
 	NativeXprReader reader(resources);
+	// One setup interval; no overlapping timer lives across dependency levels.
+	if (g2e_setup != 0) LiveCensus::Add(LiveCensus::DrawPhase, 0x7ab25, 1 | LiveCensus::g_queue, __rdtsc() - g2e_setup);
 	// A run's address, its pages proven mapped and its lines loading.
 	// (A bounded run, read through a V#: within its range, NUM_RECORDS bytes or NUM_RECORDS strides, as the normal
 	// path's evaluation, which fails past it: so does this one.)
@@ -1004,14 +1007,21 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 		};
 		const auto& runs = pair.runs[st];
 		for (size_t begin = 0, end = 0; begin < runs.size(); begin = end) {
-			for (end = begin; end < runs.size() && runs[end].level == runs[begin].level; ++end) {
-				const auto& run = runs[end];
-				if (!locate(value(run.read.low), value(run.read.high), value(run.read.offset), run.read.immediate, run.count,
-				            table.addresses[end], run.read.bounded, run.read.bounded ? value(run.read.records) : 0))
-					return false;
+			{
+				LiveCensus::Scope g2e_locate(LiveCensus::DrawPhase, 0x7ab25, 2); // fallback: a whole dependency level.
+				for (end = begin; end < runs.size() && runs[end].level == runs[begin].level; ++end) {
+					const auto& run = runs[end];
+					if (!locate(value(run.read.low), value(run.read.high), value(run.read.offset), run.read.immediate, run.count,
+					            table.addresses[end], run.read.bounded, run.read.bounded ? value(run.read.records) : 0))
+						return false;
+				}
 			}
-			for (size_t i = begin; i < end; ++i) reader.Read(table.addresses[i], runs[i].count, slots.data() + runs[i].first);
+			{
+				LiveCensus::Scope g2e_read(LiveCensus::DrawPhase, 0x7ab25, 3); // fallback: grouped reads, never per word.
+				for (size_t i = begin; i < end; ++i) reader.Read(table.addresses[i], runs[i].count, slots.data() + runs[i].first);
+			}
 		}
+		LiveCensus::Scope g2e_words(LiveCensus::DrawPhase, 0x7ab25, 4); // fallback descriptor and LOD words.
 		for (size_t i = 0; i < plan.images.size(); ++i) {
 			const auto& descriptor = plan.images[i];
 			std::array<uint32_t, 8> image {};
@@ -1034,6 +1044,7 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 		auto&       out     = table.indirect[st];
 		out.clear();
 		if (program.table_plan.indirect.empty()) return true;
+		LiveCensus::Scope g2e_indirect(LiveCensus::DrawPhase, 0x7ab25, 5); // only nonempty indirect plans.
 		thread_local const auto runtime = [] {
 			ShaderRecompiler::IR::SrtRuntime value;
 			MaterializationReaders(value);
@@ -1091,8 +1102,14 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 		auto& slots = table.blocks[st];
 		slots.resize(program.table_plan.BlockDwords());
 		if (table.addresses.size() < pair.runs[st].size()) table.addresses.resize(pair.runs[st].size());
-		if (!form.valid || form.runs.size() != pair.runs[st].size() || user_data[st].size() < form.user_words ||
-		    user_data[st].size() > 64) {
+		const bool fallback = !form.valid || form.runs.size() != pair.runs[st].size() ||
+		                      user_data[st].size() < form.user_words || user_data[st].size() > 64;
+		if (LiveCensus::g_on.load(std::memory_order_relaxed) && LiveCensus::g_render) {
+			// Count stage invocations, not timed; queue ID is preserved in the native 64-bit key.
+			LiveCensus::Add(LiveCensus::DrawPhase, 0x7ab26,
+			                (fallback ? 2ull : 1ull) | LiveCensus::g_queue, 0);
+		}
+		if (fallback) {
 			if (!by_operands(st) || !indirect(st)) return false;
 			continue;
 		}
@@ -1102,31 +1119,41 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 		const auto get = [&](uint16_t operand) { return bases[operand >> 14u][operand & 0x3fffu]; };
 		uint32_t   begin = 0;
 		for (const auto end: form.level_ends) {
-			for (auto i = begin; i < end; ++i) {
-				const auto& run     = form.runs[i];
-				const bool  bounded = run.records != TablePair::PackedRun::NotBounded;
-				if (!locate(get(run.address[0]), get(run.address[1]), get(run.address[2]), run.immediate, run.count,
-				            table.addresses[i], bounded, bounded ? get(run.records) : 0))
-					return false;
+			{
+				LiveCensus::Scope g2e_locate(LiveCensus::DrawPhase, 0x7ab25, 2); // packed: all addresses in level.
+				for (auto i = begin; i < end; ++i) {
+					const auto& run     = form.runs[i];
+					const bool  bounded = run.records != TablePair::PackedRun::NotBounded;
+					if (!locate(get(run.address[0]), get(run.address[1]), get(run.address[2]), run.immediate, run.count,
+					            table.addresses[i], bounded, bounded ? get(run.records) : 0))
+						return false;
+				}
 			}
-			for (auto i = begin; i < end; ++i) reader.Read(table.addresses[i], form.runs[i].count, slots.data() + form.runs[i].first);
+			{
+				LiveCensus::Scope g2e_read(LiveCensus::DrawPhase, 0x7ab25, 3); // packed: grouped NativeXprReader reads.
+				for (auto i = begin; i < end; ++i)
+					reader.Read(table.addresses[i], form.runs[i].count, slots.data() + form.runs[i].first);
+			}
 			begin = end;
 		}
-		const auto first = words.size();
-		words.resize(first + form.image_words.size());
-		auto*  out = words.data() + first;
-		size_t at  = 0;
-		for (size_t i = 0; i < form.image_counts.size(); ++i) {
-			std::array<uint32_t, 8> image {};
-			const uint32_t          count = form.image_counts[i];
-			for (uint32_t w = 0; w < count; ++w) {
-				image[w]    = get(form.image_words[at + w]);
-				out[at + w] = image[w] & ~NativeXprLodStatsMask[w];
+		{
+			LiveCensus::Scope g2e_words(LiveCensus::DrawPhase, 0x7ab25, 4); // packed descriptor and LOD words.
+			const auto first = words.size();
+			words.resize(first + form.image_words.size());
+			auto*  out = words.data() + first;
+			size_t at  = 0;
+			for (size_t i = 0; i < form.image_counts.size(); ++i) {
+				std::array<uint32_t, 8> image {};
+				const uint32_t          count = form.image_counts[i];
+				for (uint32_t w = 0; w < count; ++w) {
+					image[w]    = get(form.image_words[at + w]);
+					out[at + w] = image[w] & ~NativeXprLodStatsMask[w];
+				}
+				at += count;
+				if (i < program.bindings.lod_stats_count) lod_stats(image);
 			}
-			at += count;
-			if (i < program.bindings.lod_stats_count) lod_stats(image);
+			for (; at < form.image_words.size(); ++at) out[at] = get(form.image_words[at]);
 		}
-		for (; at < form.image_words.size(); ++at) out[at] = get(form.image_words[at]);
 		if (!indirect(st)) return false;
 	}
 	return true;

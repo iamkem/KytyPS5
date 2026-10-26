@@ -11,6 +11,8 @@ function censusName(e){
   return 'G2-D '+(skipped?'skipped':'eligible')+' write scan · '+words+' buffers'+(e.b.startsWith('8')?' (async)':'');
  }
  const detailed={
+  '000000000007ab25':{1:'G2-E setup / mapping epoch',2:'G2-E locate + page checks + prefetch',3:'G2-E dependent NativeXprReader reads',4:'G2-E descriptor / LOD words',5:'G2-E indirect image enumeration'},
+  '000000000007ab26':{1:'G2-E packed path (count only)',2:'G2-E fallback operand path (count only)'},
   '000000000007ab20':{1:'TableEvaluate',2:'TableGather'},
   '000000000007ab21':{1:'TablePrepareBda (global)',2:'TableBlocks inclusive',3:'Dispatch indirect args'},
   '000000000007ab22':{1:'CPU-dirty ring candidate',2:'Fallback ObtainBuffer'},
@@ -61,6 +63,20 @@ function draw(s){
     focus.append(li);
    }
    censusBox.append(focus);
+  }
+  const evaluate=lastCensus.focusEntries?.filter(e=>e.kind===12&&
+    (e.a==='000000000007ab25'||e.a==='000000000007ab26'))||[];
+  if(evaluate.length){
+   const head=document.createElement('strong');head.textContent='G2-E TableEvaluate subphases';
+   censusBox.append(head);
+   const list=document.createElement('ol');list.className='benchmark-census-list';
+   for(const entry of evaluate.sort((a,b)=>a.b.localeCompare(b.b)).slice(0,14)){
+    const li=document.createElement('li');
+    li.textContent=censusName(entry)+' · '+metric(entry.ms_per_frame,3)+' ms/frame · '+
+      metric(entry.calls_per_frame,1)+' calls/frame';
+    list.append(li);
+   }
+   censusBox.append(list);
   }
   const candidates=lastCensus.focusEntries?.filter(e=>e.a==='000000000007ab24')||[];
   if(candidates.length){
