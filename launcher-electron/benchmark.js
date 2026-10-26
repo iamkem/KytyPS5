@@ -13,6 +13,8 @@ function censusName(e){
  const detailed={
   '000000000007ab25':{1:'G2-E setup / mapping epoch',2:'G2-E locate + page checks + prefetch',3:'G2-E dependent NativeXprReader reads',4:'G2-E descriptor / LOD words',5:'G2-E indirect image enumeration'},
   '000000000007ab26':{1:'G2-E packed path (count only)',2:'G2-E fallback operand path (count only)'},
+  '000000000007ab27':{1:'G2-F sampled read calls',3:'G2-F page reuse',6:'G2-F watcher checks',9:'G2-F direct small reads',11:'G2-F direct large reads',13:'G2-F watched fallback',14:'G2-F cross-page fallback'},
+  '000000000007ab28':{1:'G2-F sampled evaluations',4:'G2-F mapping probes',5:'G2-F mapping hits',6:'G2-F mapping misses',10:'G2-F prefetch lines',11:'G2-F adjacent duplicate prefetches'},
   '000000000007ab20':{1:'TableEvaluate',2:'TableGather'},
   '000000000007ab21':{1:'TablePrepareBda (global)',2:'TableBlocks inclusive',3:'Dispatch indirect args'},
   '000000000007ab22':{1:'CPU-dirty ring candidate',2:'Fallback ObtainBuffer'},
@@ -77,6 +79,42 @@ function draw(s){
     list.append(li);
    }
    censusBox.append(list);
+  }
+  const diagnostics=lastCensus.focusEntries?.filter(e=>e.kind===12&&
+    (e.a==='000000000007ab27'||e.a==='000000000007ab28'))||[];
+  if(diagnostics.length){
+   const head=document.createElement('strong');head.textContent='G2-F sampled read / mapping paths (1-in-32 evaluations)';
+   censusBox.append(head);
+   const list=document.createElement('ol');list.className='benchmark-census-list';
+   for(const asyncQueue of [false,true]){
+    const select=(namespace,id)=>{
+     const target='000000000007ab'+namespace;
+     const entry=diagnostics.find(e=>e.a===target&&e.b.startsWith(asyncQueue?'8':'0')&&
+       parseInt(e.b.slice(-2),16)===id);
+     return entry?.calls_per_frame??0;
+    };
+    const sample=select('28',1);
+    if(!sample)continue;
+    const reads=select('27',1),map=select('28',4),hits=select('28',5);
+    const issued=select('28',10),duplicates=select('28',11);
+    const small=select('27',9),large=select('27',11);
+    const watched=select('27',13),cross=select('27',14);
+    const watcherChecks=select('27',6);
+    const li=document.createElement('li');
+    li.textContent=(asyncQueue?'Async':'Graphics')+': sampled '+metric(sample,1)+' eval/frame; '+
+      'reads '+metric(reads/sample,2)+'/eval ('+metric(100*small/Math.max(1,reads),1)+'% short direct, '+
+      metric(100*large/Math.max(1,reads),1)+'% large direct, '+
+      metric(100*watched/Math.max(1,reads),2)+'% watched, '+
+      metric(100*cross/Math.max(1,reads),2)+'% cross-page); '+
+      'mapping hits '+metric(100*hits/Math.max(1,map),1)+'%, '+
+      'watcher checks '+metric(watcherChecks/sample,2)+'/eval; '+
+      'adjacent prefetch repeats '+metric(100*duplicates/Math.max(1,issued),1)+'%.';
+    list.append(li);
+   }
+   censusBox.append(list);
+   const note=document.createElement('p');note.className='benchmark-census-note';
+   note.textContent='G2-F entries are sampled event counts per native frame, NOT measured ms. Percents use only sampled evaluations; no FPS gain is implied.';
+   censusBox.append(note);
   }
   const candidates=lastCensus.focusEntries?.filter(e=>e.a==='000000000007ab24')||[];
   if(candidates.length){

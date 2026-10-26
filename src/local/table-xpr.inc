@@ -939,11 +939,47 @@ static uint32_t TableCodeWord(const ShaderRecompiler::IR::TablePlan::Operand& op
 	                                                                                    : static_cast<uint32_t>(address >> 32u);
 }
 
+// G2-F count-only weighted records live in the existing render-thread census table.
+// Add() increments calls by one; sampled events must never masquerade as cycles/ms.
+// Local to renderDraw.cpp to avoid rebuilding common profiler headers.
+static void TableG2FAddCount(uint64_t a, uint64_t b, uint64_t count) {
+	if (count == 0) return;
+	const uint32_t kind = LiveCensus::DrawPhase;
+	const uint64_t hash = (a * 0x9e3779b97f4a7c15ull) ^ (b * 0xc2b2ae3d27d4eb4full) ^ kind;
+	for (size_t probe = 0; probe < LiveCensus::TableSize; ++probe) {
+		auto& entry = LiveCensus::g_table[(hash + probe) & (LiveCensus::TableSize - 1)];
+		if (!entry.used) entry = {a, b, 0, 0, kind, true};
+		else if (entry.a != a || entry.b != b || entry.kind != kind) continue;
+		entry.calls += count;
+		return;
+	}
+}
+
 // The slots of the pair's stages, read into their blocks where the plans address them from the user data and lower
 // slots (a pointer read from memory may hold anything: what is read through it must be mapped), and the T#/S# words
 // they make (TableXpr::words, the set's key) and the pixel stage's LOD statistics words. False: something unmapped.
 bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const uint32_t>, 2> user_data) {
 	LiveCensus::Scope g2c(LiveCensus::DrawPhase, 0x7ab20, 1); // Eval only; the caller's phase 1 also includes Gather.
+	static thread_local uint32_t g2f_sequence = 0;
+	const bool census_on = LiveCensus::g_on.load(std::memory_order_relaxed) && LiveCensus::g_render;
+	std::optional<G2FDiagnostics::Counts> g2f;
+	if (census_on && (++g2f_sequence % G2FDiagnostics::SampleEvery == 0)) g2f.emplace();
+	else if (!census_on) g2f_sequence = 0;
+	struct G2FFlush {
+		std::optional<G2FDiagnostics::Counts>& counters;
+		uint64_t queue;
+		bool success = false;
+		~G2FFlush() {
+			if (!counters) return;
+			auto& c = *counters;
+			c.locate[G2FDiagnostics::SampledEvaluations] = 1;
+			if (success) c.locate[G2FDiagnostics::CompletedEvaluations] = 1;
+			for (size_t i = 0; i < c.reader.size(); ++i)
+				TableG2FAddCount(0x7ab27, (i + 1) | queue, c.reader[i]);
+			for (size_t i = 0; i < c.locate.size(); ++i)
+				TableG2FAddCount(0x7ab28, (i + 1) | queue, c.locate[i]);
+		}
+	} g2f_flush {g2f, LiveCensus::g_queue};
 	const auto g2e_setup = (LiveCensus::g_on.load(std::memory_order_relaxed) && LiveCensus::g_render) ? __rdtsc() : 0;
 	auto&      table     = OwnTable();
 	const auto stages    = pair.programs[1] != nullptr ? 2u : 1u;
@@ -956,7 +992,7 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 	auto& words = table.words;
 	words.clear();
 	table.lod_stats.clear();
-	NativeXprReader reader(resources);
+	NativeXprReader reader(resources, g2f ? &*g2f : nullptr);
 	// One setup interval; no overlapping timer lives across dependency levels.
 	if (g2e_setup != 0) LiveCensus::Add(LiveCensus::DrawPhase, 0x7ab25, 1 | LiveCensus::g_queue, __rdtsc() - g2e_setup);
 	// A run's address, its pages proven mapped and its lines loading.
@@ -964,21 +1000,35 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 	// path's evaluation, which fails past it: so does this one.)
 	const auto locate = [&](uint64_t low, uint64_t high, uint32_t offset, int32_t immediate, uint32_t count,
 	                        uint64_t& out, bool bounded = false, uint32_t records = 0) {
+		if (g2f) ++g2f->locate[G2FDiagnostics::LocateCalls];
 		if (bounded) {
 			const auto stride = (static_cast<uint32_t>(high) >> 16u) & 0x3fffu;
 			const auto size   = stride == 0 ? uint64_t {records} : uint64_t {stride} * records;
-			if (immediate < 0 || static_cast<uint64_t>(immediate) + count * 4ull > size) return false;
+			if (immediate < 0 || static_cast<uint64_t>(immediate) + count * 4ull > size) {
+				if (g2f) ++g2f->locate[G2FDiagnostics::BoundsRejects];
+				return false;
+			}
 		}
 		const auto address = ((low | high << 32u) & 0x0000fffffffffffcull) + (offset & ~3u) +
 		                     static_cast<uint64_t>(int64_t {immediate});
 		for (auto page = address >> 14u; page <= (address + count * 4ull - 1) >> 14u; ++page) {
 			auto& seen = table.mapped[page & 255u];
-			if (seen == page) continue;
-			if (!Libs::LibKernel::Memory::IsFullyMapped(page << 14u, 16384)) return false;
+			if (g2f) ++g2f->locate[G2FDiagnostics::MappingProbes];
+			if (seen == page) {
+				if (g2f) ++g2f->locate[G2FDiagnostics::MappingHits];
+				continue;
+			}
+			if (g2f) ++g2f->locate[G2FDiagnostics::MappingMisses];
+			if (!Libs::LibKernel::Memory::IsFullyMapped(page << 14u, 16384)) {
+				if (g2f) ++g2f->locate[G2FDiagnostics::MappingFailures];
+				return false;
+			}
 			seen = page;
 		}
-		for (auto line = address & ~63ull; line < address + count * 4ull; line += 64)
+		for (auto line = address & ~63ull; line < address + count * 4ull; line += 64) {
+			if (g2f) g2f->NotePrefetch(line); // adjacent repeats within dependency level
 			__builtin_prefetch(reinterpret_cast<const void*>(line));
+		}
 		out = address;
 		return true;
 	};
@@ -1007,6 +1057,7 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 		};
 		const auto& runs = pair.runs[st];
 		for (size_t begin = 0, end = 0; begin < runs.size(); begin = end) {
+			if (g2f) g2f->BeginLevel();
 			{
 				LiveCensus::Scope g2e_locate(LiveCensus::DrawPhase, 0x7ab25, 2); // fallback: a whole dependency level.
 				for (end = begin; end < runs.size() && runs[end].level == runs[begin].level; ++end) {
@@ -1119,6 +1170,7 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 		const auto get = [&](uint16_t operand) { return bases[operand >> 14u][operand & 0x3fffu]; };
 		uint32_t   begin = 0;
 		for (const auto end: form.level_ends) {
+			if (g2f) g2f->BeginLevel();
 			{
 				LiveCensus::Scope g2e_locate(LiveCensus::DrawPhase, 0x7ab25, 2); // packed: all addresses in level.
 				for (auto i = begin; i < end; ++i) {
@@ -1156,6 +1208,7 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 		}
 		if (!indirect(st)) return false;
 	}
+	g2f_flush.success = true;
 	return true;
 }
 

@@ -32,13 +32,13 @@ test('packed and fallback preserve mapping before dependent reads per dependency
  assert.ok(packed.indexOf('g2e_locate')<packed.indexOf('g2e_read'));
  assert.ok(packed.indexOf('if (!locate(')<packed.indexOf('reader.Read('));
  assert.ok(evaluation.includes('begin = end;'));
- assert.ok(evaluation.includes('NativeXprReader reader(resources)'));
+ assert.match(evaluation,/NativeXprReader reader\(resources, g2f \? &\*g2f : nullptr\)/);
 });
 test('fallback and indirect preserve original short-circuit and validity checks',()=>{
  assert.ok(evaluation.includes('if (!by_operands(st) || !indirect(st)) return false;'));
  assert.ok(evaluation.includes('if (!indirect(st)) return false;'));
  assert.ok(evaluation.includes('if (program.table_plan.indirect.empty()) return true;'));
- assert.ok(evaluation.includes('if (!Libs::LibKernel::Memory::IsFullyMapped(page << 14u, 16384)) return false;'));
+ assert.match(evaluation,/if \(!Libs::LibKernel::Memory::IsFullyMapped\(page << 14u, 16384\)\) \{[\s\S]*?return false;/);
  assert.ok(evaluation.includes('if (count == 0 || count > Plan::IndirectCapacity'));
  assert.ok(evaluation.includes('form.runs.size() != pair.runs[st].size()'));
  assert.ok(evaluation.includes('user_data[st].size() > 64'));
