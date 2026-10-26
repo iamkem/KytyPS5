@@ -265,11 +265,13 @@ function census(session,{seconds=5,sleep=5,interval=400,timeoutMs=32000}={}){
             }
             if(line.trim()==='LIVE_DONE id='+id){
               if(!header||header.frames<2||entries.length===0)throw Error('CPU census completed without usable instrumented frames.');
+              const focusKeys=new Set(['000000000007ab20','000000000007ab21','000000000007ab22','000000000007ab23']);
               const report={schemaVersion:1,type:'census',id,mode:session.mode,label:session.mode==='experimental'?'trial-census':'std-census',
                 durationSeconds:seconds,pairedMeasurementId:session.results.at(-1)?.id??null,
                 at:new Date().toISOString(),
                 frames:header.frames,base:header.base,exe:header.exe,entryCount:entries.length,
-                logPath:log,topEntries:[...entries].sort((a,b)=>b.ms_per_frame-a.ms_per_frame).slice(0,12)};
+                logPath:log,topEntries:[...entries].sort((a,b)=>b.ms_per_frame-a.ms_per_frame).slice(0,12),
+                focusEntries:entries.filter(x=>focusKeys.has(x.a)).sort((a,b)=>b.ms_per_frame-a.ms_per_frame)};
               // Raw entries are retained for accurate per-shader offline research.
               fs.writeFileSync(path.join(session.folder,'census-'+id+'.json'),
                 JSON.stringify({...report,entries},null,2)+'\n','utf8');

@@ -5,6 +5,13 @@ const kindNames=['Dispatch','Draw','Native XPR','Dispatch phase','GPU wait','Rea
 function censusName(e){
  if(e.kind!==12)return kindNames[e.kind]||'Kind '+e.kind;
  const phase=parseInt(e.b.slice(-2),16);
+ const detailed={
+  '000000000007ab20':{1:'TableEvaluate',2:'TableGather'},
+  '000000000007ab21':{1:'TablePrepareBda (global)',2:'TableBlocks inclusive',3:'Dispatch indirect args'},
+  '000000000007ab22':{1:'CPU-dirty ring candidate',2:'Fallback ObtainBuffer'},
+  '000000000007ab23':{1:'TableTry attempt',2:'TableContinue attempt'}
+ };
+ if(detailed[e.a])return (detailed[e.a][phase]||'G2-C phase '+phase)+(e.b.startsWith('8')?' (async)':'');
  const suffix=e.a==='000000000007ab1e'?'Table draw':e.a==='000000000007ab1f'?'Table dispatch':'Draw phase';
  const phases={0:'inclusive',1:'evaluate + gather',2:'set',3:'BDA / blocks',4:'emission',5:'buffer resolve',6:'range reproof',7:'set validation',9:'arguments + indices',10:'argument miss',11:'index miss'};
  return suffix+' · '+(phases[phase]||'phase '+phase);
@@ -38,6 +45,18 @@ function draw(s){
    list.append(item);
   }
   censusBox.append(list);
+  if(lastCensus.focusEntries?.length){
+   const head=document.createElement('strong');
+   head.textContent='G2-C breakdown (nested; do not add to parent)';
+   censusBox.append(head);
+   const focus=document.createElement('ol');focus.className='benchmark-census-list';
+   for(const entry of lastCensus.focusEntries.slice(0,12)){
+    const li=document.createElement('li');
+    li.textContent=censusName(entry)+' · '+metric(entry.ms_per_frame,3)+' ms/frame';
+    focus.append(li);
+   }
+   censusBox.append(focus);
+  }
   const note=document.createElement('p');note.className='benchmark-census-note';
   note.textContent='Inclusive CPU wall timings; nested scopes overlap. See census-*.json for all shader/phase keys.';
   censusBox.append(note);

@@ -444,6 +444,7 @@ RenderExecutor::TableResult RenderExecutor::TableTry(CommandBuffer& buffer, std:
                                                      vk::IndexType index_type, const NativeXprDirectDraw* direct) {
 	auto& table = OwnTable();
 	TableSweepPairs();
+	LiveCensus::Scope g2c_try(LiveCensus::DrawPhase, 0x7ab23, 1); // TableTry after sweeping; distinct from continuation.
 	LiveCensus::Scope census(LiveCensus::DrawPhase, 0x7ab1e, 0); // census: the table path's phases (b)
 	auto&       cache = *m_native_xpr;
 	const auto& sh    = buffer.GetShaders();
@@ -549,6 +550,7 @@ RenderExecutor::TableResult RenderExecutor::TableTry(CommandBuffer& buffer, std:
 
 bool RenderExecutor::TableContinue(CommandBuffer& buffer, std::span<const uint64_t> commands, uint64_t index_base,
                                    uint64_t index_bytes, vk::IndexType index_type, const NativeXprDirectDraw* direct) {
+	LiveCensus::Scope g2c_continue(LiveCensus::DrawPhase, 0x7ab23, 2); // Includes failed attempts; distinct from TableTry.
 	if (kyty_local_table_xpr_mode.load(std::memory_order_relaxed) < 2 || !m_table_xpr || !m_native_xpr) return false;
 	auto& table = OwnTable();
 	if (table.last_pair == nullptr || buffer.IsInvalid() || index_base == 0 || index_bytes == 0 ||
@@ -937,6 +939,7 @@ static uint32_t TableCodeWord(const ShaderRecompiler::IR::TablePlan::Operand& op
 // slots (a pointer read from memory may hold anything: what is read through it must be mapped), and the T#/S# words
 // they make (TableXpr::words, the set's key) and the pixel stage's LOD statistics words. False: something unmapped.
 bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const uint32_t>, 2> user_data) {
+	LiveCensus::Scope g2c(LiveCensus::DrawPhase, 0x7ab20, 1); // Eval only; the caller's phase 1 also includes Gather.
 	auto&      table     = OwnTable();
 	const auto stages    = pair.programs[1] != nullptr ? 2u : 1u;
 	auto&      resources = m_context.GetGpuResources();
@@ -1188,6 +1191,7 @@ RenderExecutor::TableImageSet* RenderExecutor::TableSet(CommandBuffer& buffer, T
 // The V#s' words and their resolved entries (TableXpr::entries), as soon as TableEvaluate made the slots they are read
 // from: the entries' lines (a 4 MiB direct-mapped table: TLB misses too) load while the image set is found (TableSet).
 void RenderExecutor::TableGather(const TablePair& pair, std::array<std::span<const uint32_t>, 2> user_data) {
+	LiveCensus::Scope g2c(LiveCensus::DrawPhase, 0x7ab20, 2); // Independent of TableEvaluate; draw + dispatch.
 	using Kind        = ShaderRecompiler::IR::TablePlan::Operand::Kind;
 	auto&      table  = OwnTable();
 	const auto stages = pair.programs[1] != nullptr ? 2u : 1u;
@@ -1228,6 +1232,7 @@ void RenderExecutor::TableGather(const TablePair& pair, std::array<std::span<con
 
 bool RenderExecutor::TableBlocks(TablePair& pair, std::array<std::span<const uint32_t>, 2> user_data,
                                  std::array<vk::DeviceAddress, 2>& blocks, bool* writes) {
+	LiveCensus::Scope g2c(LiveCensus::DrawPhase, 0x7ab21, 2); // Includes buffer resolve, ring and final block upload.
 	using Kind         = ShaderRecompiler::IR::TablePlan::Operand::Kind;
 	auto&      table        = OwnTable();
 	auto&      buffer_cache = m_context.GetBufferCache();
@@ -1420,6 +1425,7 @@ bool RenderExecutor::TableBlocks(TablePair& pair, std::array<std::span<const uin
 					const bool cpu_written = buffer_cache.IsRegionCpuDirty(address, size) &&
 					                        !buffer_cache.IsRegionGpuModified(address, size);
 					if (cpu_written && size <= BufferCache::CACHING_PAGESIZE) {
+						LiveCensus::Scope g2c_ring(LiveCensus::DrawPhase, 0x7ab22, 1); // Ring candidate: reuse/map/copy/fallback.
 						// As ObtainBuffer: a small range the guest wrote is read from a copy in the ring (nothing held: the
 						// later uses share it while it holds, TableXpr::RingCopy), not uploaded into its buffer.
 						auto* const shared =
@@ -1467,6 +1473,7 @@ bool RenderExecutor::TableBlocks(TablePair& pair, std::array<std::span<const uin
 							continue;
 						}
 					}
+					LiveCensus::Scope g2c_fallback(LiveCensus::DrawPhase, 0x7ab22, 2); // Conventional buffer acquisition.
 					if (cpu_written) buffer_cache.EnsureBufferContents(address, size);
 					const auto [owner, offset] = buffer_cache.ObtainBuffer(address, size, false, formatted);
 					region_epochs.fill({UINT64_MAX, 0});
@@ -1503,6 +1510,7 @@ bool RenderExecutor::TableBlocks(TablePair& pair, std::array<std::span<const uin
 void RenderExecutor::TablePrepareBda(const TablePair& pair, std::array<std::span<const uint32_t>, 2> user_data) {
 	const auto global = [&](uint32_t st) { return pair.programs[st] != nullptr && pair.programs[st]->table_plan.global_memory; };
 	if (!global(0) && !global(1)) return;
+	LiveCensus::Scope g2c(LiveCensus::DrawPhase, 0x7ab21, 1); // BDA work only when global memory is used.
 	auto&                                               table = OwnTable();
 	thread_local ShaderRecompiler::IR::ResourceSnapshot snapshot;
 	thread_local std::vector<GuestRange>                ranges, stage_ranges;
@@ -2177,6 +2185,7 @@ bool RenderExecutor::TableDispatch(CommandBuffer& buffer, uint32_t groups_x, uin
 	vk::Buffer indirect_buffer = nullptr;
 	uint64_t   indirect_offset = 0;
 	if (indirect_args != 0) {
+		LiveCensus::Scope g2c_indirect(LiveCensus::DrawPhase, 0x7ab21, 3); // Compute indirect-arg acquisition.
 		// As DispatchDirect's: the arguments' owner, made current.
 		cache.EnsureBufferContents(indirect_args, 3u * sizeof(uint32_t));
 		auto& owner     = cache.GetBuffer(cache.FindBuffer(indirect_args, 3u * sizeof(uint32_t)));

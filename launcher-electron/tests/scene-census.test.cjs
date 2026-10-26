@@ -51,13 +51,16 @@ test('census is explicit, serialized with FPS measurement, emits report with raw
   assert.equal(f.session.capturingKind,'census');
   await delay(75);
   fs.appendFileSync(f.log,entry('11')+hdr(id)+entry(id)+entry(id,9,'0000000000000000','0000000000000000','2.4567')+
+   entry(id,12,'000000000007ab20','0000000000000001','0.2345')+
    'LIVE_DONE id='+id+'999\n');
   await delay(75);
   assert.equal(f.session.capturing,true,'wrong-id completion is not valid');
   fs.appendFileSync(f.log,'LIVE_DONE id='+id+'\n');
   const result=await task;
   assert.equal(result.mode,'experimental');
-  assert.equal(result.entryCount,2);
+  assert.equal(result.entryCount,3);
+  assert.equal(result.focusEntries.length,1);
+  assert.equal(result.focusEntries[0].a,'000000000007ab20');
   assert.equal(result.pairedMeasurementId,901);
   assert.equal(result.topEntries[0].kind,9);
   assert.equal(result.type,'census');
@@ -66,7 +69,8 @@ test('census is explicit, serialized with FPS measurement, emits report with raw
   assert.equal(f.session.results.length,1,'original FPS measurements are unmodified');
   assert.equal(fs.existsSync(path.join(f.session.folder,'results.jsonl')),false);
   const raw=JSON.parse(fs.readFileSync(path.join(f.session.folder,'census-'+id+'.json'),'utf8'));
-  assert.equal(raw.entries.length,2);
+  assert.equal(raw.entries.length,3);
+  assert.equal(raw.focusEntries.length,1);
   assert.equal(fs.readFileSync(path.join(f.session.folder,'census-results.jsonl'),'utf8').trim().split('\n').length,1);
  }finally{f.close();}
 });
