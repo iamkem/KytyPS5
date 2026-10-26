@@ -1,3 +1,5 @@
+#include "table-readonly-pass.h"
+
 // --- Table draws (GPU-driven XPR, docs/GPU-DRIVEN-XPR.md) ------------------------------
 //
 // Included by renderDraw.cpp after native-xpr.inc (local Vulkan recording builds only).
@@ -153,6 +155,8 @@ struct RenderExecutor::TablePair {
 	bool                                                        refused  = false;
 	std::array<const ShaderRecompiler::IR::CompiledShaderInfo*, 2> programs {}; // vertex, pixel (null: inactive)
 	std::array<std::vector<Run>, 2>                             runs;
+	// Derived on TableRuns from immutable program metadata. Reset defaults false (fail closed).
+	std::array<bool, 2> readonly_buffer_stage {};
 	// TableEvaluate's form of a stage's plan (TableRuns, TablePack): every operand an index into one of three arrays (the
 	// stage's user data, its block's slots, the stage's constants), so a draw's evaluation branches on no operand kind.
 	// Both stages' arrays in one block, each operand 16 bits (its array in the top two, its index in the low 14), each
@@ -1322,6 +1326,7 @@ bool RenderExecutor::TableBlocks(TablePair& pair, std::array<std::span<const uin
 	};
 	if (table.gathered != &pair) TableGather(pair, user_data);
 	table.gathered = nullptr; // (taken: a later draw or dispatch gathers its own)
+	const bool readonly_pass_skip = kyty_local_table_readonly_pass_skip.load(std::memory_order_relaxed) != 0;
 	for (uint32_t st = 0; st < stages; ++st) {
 		const auto& program = *pair.programs[st];
 		const auto& plan    = program.table_plan;
@@ -1329,8 +1334,17 @@ bool RenderExecutor::TableBlocks(TablePair& pair, std::array<std::span<const uin
 		auto&       entries = table.entries[st];
 		// The buffers it writes first: a range it also reads through another V# is GPU-written by then, as the
 		// normal path's second lookup (RebindBuffers) sees it (not a copy of the guest's bytes in the ring).
-		for (size_t n = 0; n < 2 * plan.buffers.size(); ++n) {
-			const auto  i         = n < plan.buffers.size() ? n : n - plan.buffers.size();
+		const size_t buffers = plan.buffers.size();
+		const bool eligible = pair.readonly_buffer_stage[st] && buffers != 0;
+		const bool skip_write_pass = readonly_pass_skip && eligible;
+		if (eligible && LiveCensus::g_on.load(std::memory_order_relaxed) && LiveCensus::g_render) {
+			// Count one eligible stage per call with length and switch state encoded in b.
+			// No per-buffer probes, no shared LiveCounters schema changes or game-side writes.
+			LiveCensus::Add(LiveCensus::DrawPhase, 0x7ab24,
+			                (static_cast<uint64_t>(buffers) << 8u) | uint64_t {skip_write_pass} | LiveCensus::g_queue, 0);
+		}
+		for (size_t n = TableReadOnlyPass::Begin(readonly_pass_skip, eligible, buffers); n < 2 * buffers; ++n) {
+			const auto  i         = n < buffers ? n : n - buffers;
 			const auto& words4    = entries[i].first;
 			const auto& resource  = program.info.buffers[i];
 			const bool  formatted = resource.formatted;
@@ -1800,11 +1814,15 @@ RenderExecutor::TableResult RenderExecutor::TableDraw(CommandBuffer& buffer, Tab
 // The pair's runs (TablePair::Run): the slots its stages evaluate, in reads of consecutive slots, by level.
 void RenderExecutor::TableRuns(TablePair& pair) {
 	using Kind  = ShaderRecompiler::IR::TablePlan::Operand::Kind;
+	pair.readonly_buffer_stage = {}; // Recompute on every shader replacement / pair respecialization.
 	auto& table = *m_table_xpr;
 	std::array<TableFlatStage, 2> flat_forms; // (packed into the pair: TablePack)
 	for (uint32_t st = 0; st < 2; ++st) {
 		if (pair.programs[st] == nullptr) continue;
 		const auto&           plan = pair.programs[st]->table_plan;
+		const auto&           info = pair.programs[st]->info.buffers;
+		// A missing/unsupported/mismatched plan is not eligible; the old loop remains intact.
+		pair.readonly_buffer_stage[st] = pair.programs[st]->table_mode && TableReadOnlyPass::Eligible(plan.buffers.size(), info);
 		std::vector<uint32_t> levels(plan.slots.size(), 0);
 		const auto            same = [](const ShaderRecompiler::IR::TablePlan::Operand& a,
 		                     const ShaderRecompiler::IR::TablePlan::Operand& b) {

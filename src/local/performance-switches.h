@@ -52,6 +52,7 @@ extern volatile std::atomic_uint32_t kyty_local_table_indirect_mode;
 extern volatile std::atomic_uint32_t kyty_local_table_store_budget;
 extern volatile std::atomic_uint32_t kyty_local_table_set_proofs;
 extern volatile std::atomic_uint32_t kyty_local_table_mru;
+extern volatile std::atomic_uint32_t kyty_local_table_readonly_pass_skip;
 #endif
 }
 
@@ -147,6 +148,7 @@ inline void InitializePerformanceSwitches() {
 	    Switch {"KYTY_TABLE_SET_PROOFS", &kyty_local_table_set_proofs, 0, 2},
 	    // Table lookups that ask the last answer first (bits: pair cache size, variant, image set).
 	    Switch {"KYTY_TABLE_MRU", &kyty_local_table_mru, 0, 7},
+    Switch {"KYTY_TABLE_READONLY_PASS_SKIP", &kyty_local_table_readonly_pass_skip},
 #endif
 	};
 	std::string enabled;

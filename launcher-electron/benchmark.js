@@ -5,6 +5,11 @@ const kindNames=['Dispatch','Draw','Native XPR','Dispatch phase','GPU wait','Rea
 function censusName(e){
  if(e.kind!==12)return kindNames[e.kind]||'Kind '+e.kind;
  const phase=parseInt(e.b.slice(-2),16);
+ if(e.a==='000000000007ab24'){
+  const words=(parseInt(e.b.slice(-4),16)>>8)&255;
+  const skipped=(parseInt(e.b.slice(-2),16)&1)!==0;
+  return 'G2-D '+(skipped?'skipped':'eligible')+' write scan · '+words+' buffers'+(e.b.startsWith('8')?' (async)':'');
+ }
  const detailed={
   '000000000007ab20':{1:'TableEvaluate',2:'TableGather'},
   '000000000007ab21':{1:'TablePrepareBda (global)',2:'TableBlocks inclusive',3:'Dispatch indirect args'},
@@ -56,6 +61,20 @@ function draw(s){
     focus.append(li);
    }
    censusBox.append(focus);
+  }
+  const candidates=lastCensus.focusEntries?.filter(e=>e.a==='000000000007ab24')||[];
+  if(candidates.length){
+   let eligibleStages=0,eligibleIterations=0,skippedIterations=0;
+   for(const e of candidates){
+    const words=(parseInt(e.b.slice(-4),16)>>8)&255;
+    const skipped=(parseInt(e.b.slice(-2),16)&1)!==0;
+    eligibleStages+=e.calls_per_frame;
+    eligibleIterations+=words*e.calls_per_frame;
+    if(skipped)skippedIterations+=words*e.calls_per_frame;
+   }
+   const p=document.createElement('p');p.className='benchmark-census-note';
+   p.textContent='G2-D read-only stage calls: '+metric(eligibleStages,1)+'/frame; write checks eligible: '+metric(eligibleIterations,1)+'/frame; skipped: '+metric(skippedIterations,1)+'/frame.';
+   censusBox.append(p);
   }
   const note=document.createElement('p');note.className='benchmark-census-note';
   note.textContent='Inclusive CPU wall timings; nested scopes overlap. See census-*.json for all shader/phase keys.';
