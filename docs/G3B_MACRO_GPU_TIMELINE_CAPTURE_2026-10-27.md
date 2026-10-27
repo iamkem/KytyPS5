@@ -1,5 +1,7 @@
 # G3-B — Macro CPU→Vulkan→GPU critical-path capture integration (2026-10-27)
 
+**Deployment update (same day):** After the original Launcher process closed, the G3-B package was successfully installed via `launcher-electron/scripts/package-latest.ps1` into the **canonical** `_Build/latest/launcher/DemonsSoulsLauncher-win32-x64/`. Packaged latest `--smoke-ui` confirmed `ELECTRON_SCENE_BENCHMARK_UI_PASS` with `gpuTimeline:true`, `ELECTRON_UI_SMOKE_PASS`, exit 0. No game was launched. The staged-only/EBUSY narrative below is historical and **no longer represents the deployment state**. Use only `.\launcher.cmd` to start the latest Launcher; do not use `_Build/g3b-staging` for builds or game runs. See `docs/HANDOFF_G3_MACRO_LATEST_LAUNCHER_2026-10-27.md`.
+
 ## Status / decision
 
 **G3-B macro execution graph design + opt-in GPU timeline capture in Launcher: CODE, TESTS, STAGING PACKAGE and GUI SMOKE PASS. Real G3-B GPU timeline not yet captured.** No shader cache, saves, GPU-rendering algorithm, native emitter/PM4 or actual game execution was modified. The user's directive is **macro research only**. **G2-J and all speculative micro-optimizations remain deferred**; performance improvement not claimed.
