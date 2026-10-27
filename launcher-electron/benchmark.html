@@ -1,12 +1,13 @@
 <!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Scene Benchmark</title><link rel="stylesheet" href="style.css"></head>
 <body class="benchmark-screen"><main class="benchmark-shell">
-  <div class="benchmark-heading"><div><small>KYTYPS5 · G2 FRAME ANALYSIS</small><h1>Scene Benchmark</h1></div><span id="bench-mode">Not active</span></div>
-  <p class="benchmark-help">Stand at the same spot and camera angle in both shader modes. Let warmup finish. No automated input, shader rebuild or save changes.</p>
+  <div class="benchmark-heading"><div><small>KYTYPS5 · G2 / G3 FRAME ANALYSIS</small><h1>Scene Benchmark</h1></div><span id="bench-mode">Not active</span></div>
+  <p class="benchmark-help">Choose a stable gameplay scene and let warmup finish. The G3-B GPU timeline needs only one On-only capture; no baseline or automated gameplay input is required.</p>
   <div class="benchmark-state" id="bench-state" role="status">Checking active session…</div>
-  <div class="benchmark-actions"><button id="bench-measure" disabled>Measure FPS (15s)</button><button id="bench-census" disabled>Profile CPU (5s)</button></div><p id="bench-hint" class="benchmark-help">Return to the game within 5 seconds after clicking. Keep the camera still; run one measurement at a time.</p>
+  <div class="benchmark-actions"><button id="bench-measure" disabled>Measure FPS (15s)</button><button id="bench-census" disabled>Profile CPU (5s)</button><button id="bench-gpu-timeline" disabled>GPU Timeline (2s)</button></div><p id="bench-hint" class="benchmark-help">Return to the game within 5 seconds after clicking. GPU Timeline captures GPU work and CPU/GPU handoffs without per-draw marks; it is not an FPS test. Run one measurement at a time.</p>
   <div class="benchmark-report"><strong>Latest FPS measurement</strong><div id="bench-result" class="benchmark-empty">No samples yet.</div></div>
   <div class="benchmark-report"><strong>Latest CPU census (5s)</strong><div id="bench-census-result" class="benchmark-empty">No CPU census yet.</div></div>
+  <div class="benchmark-report"><strong>Latest GPU timeline (G3-B)</strong><div id="bench-gpu-result" class="benchmark-empty">No GPU timeline yet.</div></div>
   <div class="benchmark-path">Results: <span id="bench-folder">—</span></div>
-  <div class="benchmark-bottom"><span>Use 3 samples per mode. A/B/B/A is best.</span><button id="bench-close">Close panel</button></div>
+  <div class="benchmark-bottom"><span>One G3-B GPU timeline is enough for initial macro diagnosis; no baseline required.</span><button id="bench-close">Close panel</button></div>
 </main><script src="benchmark.js"></script></body></html>

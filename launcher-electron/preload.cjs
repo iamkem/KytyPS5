@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('launcher', Object.freeze({
   benchmarkStatus: () => ipcRenderer.invoke('launcher:benchmark-status'),
   benchmarkCapture: () => ipcRenderer.invoke('launcher:benchmark-capture'),
   benchmarkCensus: () => ipcRenderer.invoke('launcher:benchmark-census'),
+  benchmarkGpuTimeline: () => ipcRenderer.invoke('launcher:benchmark-gpu-timeline'),
   benchmarkProbe: () => ipcRenderer.invoke('launcher:benchmark-probe'),
   onBenchmarkStatus: callback => ipcRenderer.on('launcher:benchmark-status',(_event,result)=>callback(result)),
   showShaderProgress: () => ipcRenderer.invoke('launcher:shader-progress-window'),

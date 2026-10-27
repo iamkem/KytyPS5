@@ -7,6 +7,10 @@ const path = require('node:path');
 const PREFIX='LIVE_MEASURE';
 const MAX_INCREMENT=2*1024*1024;
 const MAX_SECONDS=30;
+const TRACE_SECONDS=2;
+const TRACE_RECORD_BYTES=32;
+const TRACE_MAX_RECORDS=1<<22;
+const TRACE_MAX_BYTES=TRACE_MAX_RECORDS*TRACE_RECORD_BYTES;
 
 function readMeasurement(line,id,expectedLabel=null) {
   if(!line.startsWith(PREFIX+' id='+id+' '))return null;
@@ -55,6 +59,15 @@ function parseCensusEntry(line,id){
   return {kind,a:m[3].toLowerCase(),b:m[4].toLowerCase(),calls_per_frame:calls,ms_per_frame:ms};
 }
 
+function parseGpuTraceLine(line,id){
+  const m=line.match(/^LIVE_TRACE id=(\d+) records=(\d+) tsc_hz=(\d+(?:\.\d+)?) path=(.+)$/);
+  if(!m||m[1]!==String(id))return null;
+  const count=Number(m[2]),hz=Number(m[3]);
+  if(!Number.isSafeInteger(count)||count<1||count>TRACE_MAX_RECORDS||
+    !Number.isFinite(hz)||hz<1e6||hz>1e11||!m[4].trim())return null;
+  return {count,hz,path:m[4]};
+}
+
 function parseLogNotice(text,root,mode) {
   const expected=mode==='experimental'?
     path.join(root,'_Build','shader-feature-trial','run-logs'):path.join(root,'_Build','run-logs');
@@ -80,7 +93,7 @@ function create(root, mode) {
   fs.writeFileSync(commandFile,'id 0\n','utf8');
   return {
     mode,folder,commandFile,logPath:null,running:true,ready:false,probing:false,probeFailed:false,capturing:false,number:0,
-    startedAt:Date.now(),lastId:0,results:[],censusResults:[],capturingKind:null
+    startedAt:Date.now(),lastId:0,results:[],censusResults:[],gpuTraceResults:[],capturingKind:null
   };
 }
 
@@ -291,8 +304,80 @@ function census(session,{seconds=5,sleep=5,interval=400,timeoutMs=32000}={}){
   });
 }
 
+// G3-B opt-in native timeline capture. Native trace timestamps existing Vulkan
+// command buffers and records ordered submit/readback/idle events. No new GPU
+// fence, shader rebuild, screenshot, guest control or high-cost per-draw marks.
+function gpuTimeline(session,{seconds=TRACE_SECONDS,sleep=5,interval=250,timeoutMs=35000}={}){
+  if(!session||!session.running)throw Error('Game is not active.');
+  if(session.capturing||session.probing)throw Error('Another measurement or readiness handshake is running.');
+  if(!session.ready||!session.logPath||!fs.existsSync(session.logPath))
+    throw Error('Native live-control handshake is not ready yet.');
+  if(seconds!==TRACE_SECONDS||sleep<0||sleep>10)throw Error('Only a bounded two-second plain GPU timeline is supported.');
+  session.capturing=true;session.capturingKind='gpu-timeline';
+  const id=Math.max(Date.now(),session.lastId+1);
+  session.lastId=id;
+  const trace=path.join(session.folder,'gpu-trace-'+id+'.bin');
+  const log=session.logPath;
+  let initial;
+  try{
+    // Native LIVE command parsing is whitespace-delimited with 255-byte paths.
+    if(/[\s\r\n]/.test(trace)||trace.length>240)throw Error('Trace path must have no spaces and fit the native path limit.');
+    if(fs.existsSync(trace))throw Error('Timeline capture path already exists.');
+    initial=fs.statSync(log).size;
+    publishCommand(session,id,'sleep '+sleep+'\ntrace '+seconds+' '+trace+'\n');
+  }catch(error){session.capturing=false;session.capturingKind=null;throw error;}
+  return new Promise((resolve,reject)=>{
+    let offset=initial,tail='',header=null,done=false;
+    const started=Date.now();
+    const timer=setInterval(()=>{
+      try{
+        if(done)return;
+        if(Date.now()-started>timeoutMs)throw Error('GPU timeline timed out.');
+        const size=fs.statSync(log).size;
+        if(size<offset)throw Error('Game log changed during GPU timeline.');
+        const bytes=Math.min(size-offset,MAX_INCREMENT);
+        if(bytes){
+          const lines=(tail+readNew(log,offset,offset+bytes)).split(/\r?\n/);
+          offset+=bytes;tail=lines.pop().slice(-4096);
+          for(const line of lines){
+            if(line.startsWith('LIVE_ERROR id='+id+' '))throw Error('Native GPU timeline reported an error.');
+            if(line.startsWith('LIVE_TRACE id='+id+' ')){
+              if(header)throw Error('Duplicate GPU timeline header.');
+              header=parseGpuTraceLine(line,id);
+              if(!header)throw Error('Invalid GPU timeline header.');
+            }
+            if(line.trim()==='LIVE_DONE id='+id){
+              if(!header)throw Error('Native completed without a GPU timeline result.');
+              if(path.normalize(header.path).toLowerCase()!==path.normalize(trace).toLowerCase())
+                throw Error('GPU trace file path does not match the active session.');
+              const info=fs.statSync(trace);
+              if(!info.isFile()||info.size<TRACE_RECORD_BYTES||info.size>TRACE_MAX_BYTES||
+                info.size%TRACE_RECORD_BYTES!==0||info.size/TRACE_RECORD_BYTES!==header.count)
+                throw Error('GPU trace binary size/count mismatch.');
+              const report={schemaVersion:1,type:'gpu-timeline',id,at:new Date().toISOString(),mode:session.mode,
+                durationSeconds:seconds,records:header.count,tscHz:header.hz,tracePath:trace,logPath:log,
+                pairedMeasurementId:session.results.at(-1)?.id??null};
+              // The native .hz companion is required for correct offline TSC
+              // conversion by tools/local/live-trace.py; do not guess CPU Hz.
+              fs.writeFileSync(trace+'.hz',String(header.hz)+'\n','utf8');
+              fs.appendFileSync(path.join(session.folder,'gpu-timeline-results.jsonl'),JSON.stringify(report)+'\n','utf8');
+              session.gpuTraceResults.push(report);
+              done=true;clearInterval(timer);session.capturing=false;session.capturingKind=null;
+              resolve(report);return;
+            }
+          }
+        }
+        if(!session.running||session.logPath!==log)throw Error('Game session ended before GPU trace completed.');
+      }catch(error){
+        if(session.running){session.ready=false;session.probeFailed=true;}
+        done=true;clearInterval(timer);session.capturing=false;session.capturingKind=null;reject(error);
+      }
+    },interval);
+  });
+}
+
 function end(session) {
   if(session)session.running=false;
 }
 
-module.exports={create,bindLog,parseLogNotice,readMeasurement,parseCensusHeader,parseCensusEntry,publishCommand,probe,capture,census,end};
+module.exports={create,bindLog,parseLogNotice,readMeasurement,parseCensusHeader,parseCensusEntry,parseGpuTraceLine,publishCommand,probe,capture,census,gpuTimeline,end};

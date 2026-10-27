@@ -148,7 +148,7 @@ function benchmarkInfo(){
   return {enabled:!!s,mode:s?.mode||'',ready:!!s?.ready&&!!s?.running,
     active:!!s?.running,probing:!!s?.probing,probeFailed:!!s?.probeFailed,capturing:!!s?.capturing,
     capturingKind:s?.capturingKind||null,
-    logPath:s?.logPath||'',folder:s?.folder||'',results:s?.results||[],censusResults:s?.censusResults||[]};
+    logPath:s?.logPath||'',folder:s?.folder||'',results:s?.results||[],censusResults:s?.censusResults||[],gpuTraceResults:s?.gpuTraceResults||[]};
 }
 function sendBenchmarkInfo(){
   if(benchmarkWindow&&!benchmarkWindow.isDestroyed())
@@ -328,6 +328,13 @@ app.whenReady().then(()=>{
       throw Error('Start the game with Scene Benchmark enabled before measuring CPU phases.');
     const session=benchmarkSession;
     try{const pending=sceneBenchmark.census(session);sendBenchmarkInfo();return await pending;}
+    finally{sendBenchmarkInfo();}
+  });
+  ipcMain.handle('launcher:benchmark-gpu-timeline',async event=>{
+    if(!benchmarkWindow||event.sender!==benchmarkWindow.webContents||!gameProcess||!benchmarkSession?.running)
+      throw Error('Start the game with Scene Benchmark enabled before capturing GPU timeline.');
+    const session=benchmarkSession;
+    try{const pending=sceneBenchmark.gpuTimeline(session);sendBenchmarkInfo();return await pending;}
     finally{sendBenchmarkInfo();}
   });
   ipcMain.handle('launcher:benchmark-capture',async event=>{
@@ -746,12 +753,12 @@ app.whenReady().then(()=>{
         openBenchmarkWindow();
         await waitLoad(benchmarkWindow);
         const benchUi=await benchmarkWindow.webContents.executeJavaScript(
-          "(async()=>({capture:!!document.querySelector('#bench-measure'),cpuCensus:!!document.querySelector('#bench-census'),"+
-          "disabled:document.querySelector('#bench-measure').disabled,censusDisabled:document.querySelector('#bench-census').disabled,"+
+          "(async()=>({capture:!!document.querySelector('#bench-measure'),cpuCensus:!!document.querySelector('#bench-census'),gpuTimeline:!!document.querySelector('#bench-gpu-timeline'),"+
+          "disabled:document.querySelector('#bench-measure').disabled,censusDisabled:document.querySelector('#bench-census').disabled,gpuDisabled:document.querySelector('#bench-gpu-timeline').disabled,"+
           "mode:!!document.querySelector('#bench-mode'),"+
-          "bridge:typeof window.launcher.benchmarkCapture==='function'&&typeof window.launcher.benchmarkCensus==='function',"+
+          "bridge:typeof window.launcher.benchmarkCapture==='function'&&typeof window.launcher.benchmarkCensus==='function'&&typeof window.launcher.benchmarkGpuTimeline==='function',"+
           "status:await window.launcher.benchmarkStatus()}))()");
-        if(!benchUi.capture||!benchUi.cpuCensus||!benchUi.disabled||!benchUi.censusDisabled||!benchUi.mode||!benchUi.bridge||benchUi.status.enabled)
+        if(!benchUi.capture||!benchUi.cpuCensus||!benchUi.gpuTimeline||!benchUi.disabled||!benchUi.censusDisabled||!benchUi.gpuDisabled||!benchUi.mode||!benchUi.bridge||benchUi.status.enabled)
           throw Error('Scene Benchmark UI smoke failed: '+JSON.stringify(benchUi));
         console.log('ELECTRON_SCENE_BENCHMARK_UI_PASS '+JSON.stringify(benchUi));
         try{fs.writeFileSync(path.join(reviewDir,'review-scene-benchmark.png'),

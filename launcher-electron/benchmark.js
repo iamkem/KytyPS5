@@ -37,12 +37,23 @@ function draw(s){
  $('bench-measure').textContent=s.probeFailed&&!s.ready?'Retry connection':'Measure FPS (15s)';
  $('bench-measure').disabled=measuring||s.capturing||(!s.ready&&!s.probeFailed)||!s.active;
  $('bench-census').disabled=measuring||s.capturing||!s.ready||!s.active;
+ $('bench-gpu-timeline').disabled=measuring||s.capturing||!s.ready||!s.active;
  $('bench-close').textContent=s.active?'Minimize panel':'Close panel';
  $('bench-state').textContent=!s.active?'Game session has ended. Start a new benchmark-enabled Play for another sample.':
    measuring?'Measuring… switch focus to the game now.':
    s.probeFailed?'Live-control is not responding yet. Click Retry connection when gameplay is ready.':
    !s.ready?'Waiting for the matching game log and native readiness handshake…':
    'Ready. Move to your benchmark scene, then click Measure.';
+ const lastTrace=s.gpuTraceResults?.at(-1);
+ const gpuBox=$('bench-gpu-result');
+ gpuBox.replaceChildren();
+ if(lastTrace){
+  const p=document.createElement('p');
+  p.textContent='Captured '+lastTrace.records.toLocaleString()+' timeline events over '+lastTrace.durationSeconds+' seconds (native GPU/CPU scheduling trace).';
+  const loc=document.createElement('p');loc.className='benchmark-census-note';
+  loc.textContent='Raw trace: '+lastTrace.tracePath+' (plus .hz). Use tools/local/live-trace.py frames / gpu for offline diagnosis. No FPS gain implied.';
+  gpuBox.append(p,loc);
+ }else gpuBox.textContent='No GPU timeline for this session.';
  const lastCensus=s.censusResults?.at(-1);
  const censusBox=$('bench-census-result');
  censusBox.replaceChildren();
@@ -220,14 +231,15 @@ window.launcher.benchmarkStatus().then(draw).catch(e=>$('bench-state').textConte
 async function startMeasurement(kind){
  if(measuring)return;
  measuring=true;
- $('bench-measure').disabled=true;$('bench-census').disabled=true;
- $('bench-state').textContent=kind==='census'?'CPU phase profiling starts in 5 seconds; return to the game for 5 seconds.':'FPS measurement starts in 5 seconds; return to the game for 15 seconds.';
+ $('bench-measure').disabled=true;$('bench-census').disabled=true;$('bench-gpu-timeline').disabled=true;
+ $('bench-state').textContent=kind==='census'?'CPU phase profiling starts in 5 seconds; return to the game for 5 seconds.':kind==='gpu'?'GPU timeline starts in 5 seconds; return to the game for 2 seconds. This is not an FPS benchmark.':'FPS measurement starts in 5 seconds; return to the game for 15 seconds.';
  let errorMessage='';
  try{
   if(current?.probeFailed&&!current?.ready){
     await window.launcher.benchmarkProbe();
   }else{
-    if(kind==='census')await window.launcher.benchmarkCensus();
+    if(kind==='gpu')await window.launcher.benchmarkGpuTimeline();
+    else if(kind==='census')await window.launcher.benchmarkCensus();
     else await window.launcher.benchmarkCapture();
   }
  }catch(error){errorMessage=error.message;}
@@ -240,4 +252,5 @@ async function startMeasurement(kind){
 }
 $('bench-measure').addEventListener('click',()=>startMeasurement('fps'));
 $('bench-census').addEventListener('click',()=>startMeasurement('census'));
+$('bench-gpu-timeline').addEventListener('click',()=>startMeasurement('gpu'));
 $('bench-close').addEventListener('click',()=>window.close());
