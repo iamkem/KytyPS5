@@ -16,6 +16,8 @@ function censusName(e){
   '000000000007ab27':{1:'G2-F sampled read calls',3:'G2-F page reuse',6:'G2-F watcher checks',9:'G2-F direct small reads',11:'G2-F direct large reads',13:'G2-F watched fallback',14:'G2-F cross-page fallback'},
   '000000000007ab28':{1:'G2-F sampled evaluations',4:'G2-F mapping probes',5:'G2-F mapping hits',6:'G2-F mapping misses',10:'G2-F prefetch lines',11:'G2-F adjacent duplicate prefetches'},
   '000000000007ab29':{1:'G2-H packed dependency levels',2:'G2-H eligible unbounded levels',3:'G2-H packed runs',4:'G2-H eligible unbounded runs',5:'G2-H specialized levels',6:'G2-H specialized runs'},
+  '000000000007ab2a':{1:'G2-I sampled TableBlocks calls',2:'G2-I completed TableBlocks calls',3:'G2-I stages',4:'G2-I buffer descriptors',5:'G2-I writable descriptors',6:'G2-I writable ObtainBuffer calls',7:'G2-I read-only descriptors',8:'G2-I reused read-only buffers',9:'G2-I read-only resolves',10:'G2-I final uploads',11:'G2-I uploaded bytes',12:'G2-I empty stages'},
+  '000000000007ab2b':{1:'G2-I sampled writable ObtainBuffer (cycles)',2:'G2-I sampled final block upload (cycles)' },
   '000000000007ab20':{1:'TableEvaluate',2:'TableGather'},
   '000000000007ab21':{1:'TablePrepareBda (global)',2:'TableBlocks inclusive',3:'Dispatch indirect args'},
   '000000000007ab22':{1:'CPU-dirty ring candidate',2:'Fallback ObtainBuffer'},
@@ -137,6 +139,41 @@ function draw(s){
    censusBox.append(list);
    const note=document.createElement('p');note.className='benchmark-census-note';
    note.textContent='G2-H values are sampled event counts (not ms or FPS improvement). Bounded or invalid plans remain unchanged.';
+   censusBox.append(note);
+  }
+  const g2i=lastCensus.focusEntries?.filter(e=>e.kind===12&&
+    (e.a==='000000000007ab2a'||e.a==='000000000007ab2b'))||[];
+  if(g2i.length){
+   const head=document.createElement('strong');head.textContent='G2-I TableBlocks sampled breakdown (1-in-64 calls)';
+   censusBox.append(head);
+   const list=document.createElement('ol');list.className='benchmark-census-list';
+   for(const [queue,prefix] of [['Graphics','0'],['Async','8']]){
+    const metricAt=(namespace,id)=>{
+     const e=g2i.find(x=>x.a==='000000000007ab2'+namespace&&x.b.startsWith(prefix)&&parseInt(x.b.slice(-2),16)===id);
+     return e||null;
+    };
+    const count=id=>metricAt('a',id)?.calls_per_frame||0;
+    const calls=count(1);
+    if(!calls)continue;
+    const stages=count(3),descriptors=count(4),readOnly=count(7),writable=count(5);
+    const uploads=count(10),bytes=count(11),acquires=count(6);
+    const tUpload=metricAt('b',2)?.ms_per_frame||0;
+    const tAcquire=metricAt('b',1)?.ms_per_frame||0;
+    const li=document.createElement('li');
+    li.textContent=queue+': '+metric(calls,2)+' sampled blocks/frame; '+
+     metric(descriptors/Math.max(calls,1),1)+' descriptors/call ('+
+     metric(100*writable/Math.max(descriptors,1),1)+'% writable); '+
+     metric(100*count(8)/Math.max(readOnly,1),1)+'% read-only reused; '+
+     metric(uploads/Math.max(calls,1),2)+' uploads/call ('+
+     metric(bytes/Math.max(uploads,1),0)+' bytes/upload), '+
+     metric(acquires/Math.max(calls,1),3)+' writable obtains/call; '+
+     'sampled acquisition '+metric(tAcquire,4)+' ms/frame, uploads '+
+     metric(tUpload,4)+' ms/frame.';
+    list.append(li);
+   }
+   censusBox.append(list);
+   const note=document.createElement('p');note.className='benchmark-census-note';
+   note.textContent='G2-I times cover ONLY 1-in-64 sampled TableBlocks calls; do not compare directly to inclusive TableBlocks ms/frame. CPU Census perturbs timing. This is diagnostic, not an FPS gain.';
    censusBox.append(note);
   }
   const candidates=lastCensus.focusEntries?.filter(e=>e.a==='000000000007ab24')||[];
