@@ -1,5 +1,6 @@
 #include "table-readonly-pass.h"
 #include "table-prefetch-dedupe.h"
+#include "table-unbounded-levels.h"
 
 // --- Table draws (GPU-driven XPR, docs/GPU-DRIVEN-XPR.md) ------------------------------
 //
@@ -158,6 +159,8 @@ struct RenderExecutor::TablePair {
 	std::array<std::vector<Run>, 2>                             runs;
 	// Derived on TableRuns from immutable program metadata. Reset defaults false (fail closed).
 	std::array<bool, 2> readonly_buffer_stage {};
+	// Immutable packed plan metadata; populated with TablePack and reset on plan rebuild.
+	std::array<std::vector<uint8_t>, 2> unbounded_levels;
 	// TableEvaluate's form of a stage's plan (TableRuns, TablePack): every operand an index into one of three arrays (the
 	// stage's user data, its block's slots, the stage's constants), so a draw's evaluation branches on no operand kind.
 	// Both stages' arrays in one block, each operand 16 bits (its array in the top two, its index in the low 14), each
@@ -964,6 +967,7 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 	static thread_local uint32_t g2f_sequence = 0;
 	const bool census_on = LiveCensus::g_on.load(std::memory_order_relaxed) && LiveCensus::g_render;
 	const bool g2g_prefetch_dedupe = kyty_local_table_prefetch_dedupe.load(std::memory_order_relaxed) != 0;
+	const bool g2h_unbounded_levels = kyty_local_table_unbounded_levels.load(std::memory_order_relaxed) != 0;
 	TablePrefetchDedupe::State g2g_prefetch_state;
 	std::optional<G2FDiagnostics::Counts> g2f;
 	if (census_on && (++g2f_sequence % G2FDiagnostics::SampleEvery == 0)) g2f.emplace();
@@ -981,6 +985,8 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 				TableG2FAddCount(0x7ab27, (i + 1) | queue, c.reader[i]);
 			for (size_t i = 0; i < c.locate.size(); ++i)
 				TableG2FAddCount(0x7ab28, (i + 1) | queue, c.locate[i]);
+			for (size_t i = 0; i < c.packed.size(); ++i)
+				TableG2FAddCount(0x7ab29, (i + 1) | queue, c.packed[i]);
 		}
 	} g2f_flush {g2f, LiveCensus::g_queue};
 	const auto g2e_setup = (LiveCensus::g_on.load(std::memory_order_relaxed) && LiveCensus::g_render) ? __rdtsc() : 0;
@@ -1178,17 +1184,43 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 		const std::array<const uint32_t*, 3> bases {user_data[st].data(), slots.data(), form.constants.data()};
 		const auto get = [&](uint16_t operand) { return bases[operand >> 14u][operand & 0x3fffu]; };
 		uint32_t   begin = 0;
+		size_t     level_index = 0;
 		for (const auto end: form.level_ends) {
+			const bool unbounded = level_index < pair.unbounded_levels[st].size() && pair.unbounded_levels[st][level_index] != 0;
+			const bool specialized = g2h_unbounded_levels && unbounded;
+			++level_index;
+			if (g2f) {
+				++g2f->packed[G2FDiagnostics::Levels];
+				g2f->packed[G2FDiagnostics::Runs] += end - begin;
+				if (unbounded) {
+					++g2f->packed[G2FDiagnostics::UnboundedLevels];
+					g2f->packed[G2FDiagnostics::UnboundedRuns] += end - begin;
+				}
+				if (specialized) {
+					++g2f->packed[G2FDiagnostics::OptimizedLevels];
+					g2f->packed[G2FDiagnostics::OptimizedRuns] += end - begin;
+				}
+			}
 			if (g2f) g2f->BeginLevel();
 			if (g2g_prefetch_dedupe) g2g_prefetch_state.BeginLevel();
 			{
 				LiveCensus::Scope g2e_locate(LiveCensus::DrawPhase, 0x7ab25, 2); // packed: all addresses in level.
-				for (auto i = begin; i < end; ++i) {
-					const auto& run     = form.runs[i];
-					const bool  bounded = run.records != TablePair::PackedRun::NotBounded;
-					if (!locate(get(run.address[0]), get(run.address[1]), get(run.address[2]), run.immediate, run.count,
-					            table.addresses[i], bounded, bounded ? get(run.records) : 0))
-						return false;
+				if (specialized) {
+					// Immutable metadata proves that no run in this level has bounded range metadata.
+					for (auto i = begin; i < end; ++i) {
+						const auto& run = form.runs[i];
+						if (!locate(get(run.address[0]), get(run.address[1]), get(run.address[2]), run.immediate, run.count,
+						            table.addresses[i]))
+							return false;
+					}
+				} else {
+					for (auto i = begin; i < end; ++i) {
+						const auto& run     = form.runs[i];
+						const bool  bounded = run.records != TablePair::PackedRun::NotBounded;
+						if (!locate(get(run.address[0]), get(run.address[1]), get(run.address[2]), run.immediate, run.count,
+						            table.addresses[i], bounded, bounded ? get(run.records) : 0))
+							return false;
+					}
 				}
 			}
 			{
@@ -1905,6 +1937,7 @@ RenderExecutor::TableResult RenderExecutor::TableDraw(CommandBuffer& buffer, Tab
 void RenderExecutor::TableRuns(TablePair& pair) {
 	using Kind  = ShaderRecompiler::IR::TablePlan::Operand::Kind;
 	pair.readonly_buffer_stage = {}; // Recompute on every shader replacement / pair respecialization.
+	for (auto& flags : pair.unbounded_levels) flags.clear();
 	auto& table = *m_table_xpr;
 	std::array<TableFlatStage, 2> flat_forms; // (packed into the pair: TablePack)
 	for (uint32_t st = 0; st < 2; ++st) {
@@ -1979,6 +2012,12 @@ void RenderExecutor::TableRuns(TablePair& pair) {
 			for (const auto& word: words) flat.buffer_words.push_back(flat_of(word));
 	}
 	TablePack(pair, flat_forms);
+	for (uint32_t st = 0; st < 2; ++st) {
+		if (!pair.packed[st].valid) continue; // Invalid plans always fall back to the original operands path.
+		const auto& packed = pair.packed[st];
+		pair.unbounded_levels[st] = TableUnboundedLevels::Compute(packed.runs, packed.level_ends,
+		    [](const TablePair::PackedRun& run) { return run.records == TablePair::PackedRun::NotBounded; });
+	}
 }
 
 // The pair's flat forms packed into one block (TablePair::packed): a stage whose operand indices, counts or levels do not

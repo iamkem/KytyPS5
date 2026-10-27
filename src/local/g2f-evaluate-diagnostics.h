@@ -19,9 +19,11 @@ enum Locate : size_t {
   BoundsRejects, MappingProbes, MappingHits, MappingMisses, MappingFailures,
   PrefetchIssued, AdjacentPrefetchDuplicates, SuppressedPrefetch, LocateCount
 };
+enum Packed : size_t { Levels, UnboundedLevels, Runs, UnboundedRuns, OptimizedLevels, OptimizedRuns, PackedCount };
 struct Counts {
   std::array<uint64_t, ReaderCount> reader {};
   std::array<uint64_t, LocateCount> locate {};
+  std::array<uint64_t, PackedCount> packed {};
   uint64_t previous_line = 0;
   bool previous_valid = false;
   void BeginLevel() {

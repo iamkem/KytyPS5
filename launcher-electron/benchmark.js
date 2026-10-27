@@ -15,6 +15,7 @@ function censusName(e){
   '000000000007ab26':{1:'G2-E packed path (count only)',2:'G2-E fallback operand path (count only)'},
   '000000000007ab27':{1:'G2-F sampled read calls',3:'G2-F page reuse',6:'G2-F watcher checks',9:'G2-F direct small reads',11:'G2-F direct large reads',13:'G2-F watched fallback',14:'G2-F cross-page fallback'},
   '000000000007ab28':{1:'G2-F sampled evaluations',4:'G2-F mapping probes',5:'G2-F mapping hits',6:'G2-F mapping misses',10:'G2-F prefetch lines',11:'G2-F adjacent duplicate prefetches'},
+  '000000000007ab29':{1:'G2-H packed dependency levels',2:'G2-H eligible unbounded levels',3:'G2-H packed runs',4:'G2-H eligible unbounded runs',5:'G2-H specialized levels',6:'G2-H specialized runs'},
   '000000000007ab20':{1:'TableEvaluate',2:'TableGather'},
   '000000000007ab21':{1:'TablePrepareBda (global)',2:'TableBlocks inclusive',3:'Dispatch indirect args'},
   '000000000007ab22':{1:'CPU-dirty ring candidate',2:'Fallback ObtainBuffer'},
@@ -116,6 +117,26 @@ function draw(s){
    censusBox.append(list);
    const note=document.createElement('p');note.className='benchmark-census-note';
    note.textContent='G2-F entries are sampled event counts per native frame, NOT measured ms. Percents use only sampled evaluations; no FPS gain is implied.';
+   censusBox.append(note);
+  }
+  const g2h=lastCensus.focusEntries?.filter(e=>e.kind===12 && e.a==='000000000007ab29')||[];
+  if(g2h.length){
+   const head=document.createElement('strong');head.textContent='G2-H packed unbounded-level opportunity (sampled 1-in-32)';
+   censusBox.append(head);
+   const list=document.createElement('ol');list.className='benchmark-census-list';
+   for(const [label,prefix] of [['Graphics','0'],['Async','8']]){
+    const val=id=>g2h.find(e=>e.b.startsWith(prefix)&&parseInt(e.b.slice(-2),16)===id)?.calls_per_frame||0;
+    const levels=val(1),eligible=val(2),runs=val(3),eligibleRuns=val(4),specialized=val(5);
+    if(!levels)continue;
+    const li=document.createElement('li');
+    li.textContent=label+': eligible '+metric(100*eligible/levels,1)+'% of '+metric(levels,1)+
+      ' sampled levels/frame; '+metric(100*eligibleRuns/Math.max(runs,1),1)+'% of '+
+      metric(runs,1)+' runs; specialized '+metric(specialized,1)+' levels/frame.';
+    list.append(li);
+   }
+   censusBox.append(list);
+   const note=document.createElement('p');note.className='benchmark-census-note';
+   note.textContent='G2-H values are sampled event counts (not ms or FPS improvement). Bounded or invalid plans remain unchanged.';
    censusBox.append(note);
   }
   const candidates=lastCensus.focusEntries?.filter(e=>e.a==='000000000007ab24')||[];
