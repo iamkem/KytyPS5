@@ -1,5 +1,7 @@
 # G2-H Experimental ON-only runtime check — 2026-10-27
 
+**Historical note, superseded for FPS/Census:** A later user-performed run successfully recorded live G2-H CPU Census and two 15s FPS windows. See `docs/G2H_ON_ONLY_CENSUS_RESULTS_2026-10-27.md` for the verified results. This file documents only the earlier 09:46 handshake-only run.
+
 ## Verdict
 
 **GAME START + SCENE LOAD + WARMUP OBSERVED (G2-H ON). FPS/CENSUS ACCEPTANCE: NOT RECORDED.**
