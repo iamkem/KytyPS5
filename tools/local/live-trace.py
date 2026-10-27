@@ -50,7 +50,8 @@ class Trace:
                 last[tid] = a
             elif kind == GPU_SPAN_NS and tid in last:
                 spans[last.pop(tid)] = (a, b)
-        # GPU clock -> TSC: the completion a monitor sees is never earlier than the GPU end.
+        # GPU clock -> TSC: the monitor observes GPU completion sometime after GPU end.
+        # The minimum observation delay is unknown; this is NOT calibrated cross-clock alignment.
         offsets = [self.done[t] - e / 1e6 for t, (bg, e) in spans.items() if t in self.done]
         offset = min(offsets) if offsets else 0.0
         self.gpu_offset = offset
@@ -199,12 +200,13 @@ def cmd_producers(t, args):
 def cmd_gpu(t, args):
     lo = t.flips[args.index]
     hi = lo + args.span
-    submitted, replayed, queue = {}, {}, None
+    submitted, replay_started, queue = {}, {}, None
     for tsc, tid, kind, a, b in t.records:
-        # The recording worker's replay (b == 1) is when the command buffer reached the queue,
-        # after the upload copies it reads (KYTY_DEFERRED_SUBMIT).
+        # Worker replay (b == 1) begins AFTER upload waits, but BEFORE
+        # vkEndCommandBuffer, queue-mutex acquisition and vkQueueSubmit.
+        # This is NOT a timestamp of GPU-queue submission.
         if kind == GPU_SUBMIT and b == 1:
-            replayed[a] = t.ms(tsc)
+            replay_started[a] = t.ms(tsc)
         if tid != t.render:
             continue
         if kind == RENDER_SLICE:
@@ -218,9 +220,9 @@ def cmd_gpu(t, args):
         at, q = submitted.get(tick, (None, None))
         busy_by_queue[q] += min(e, hi) - max(s, lo)
         if e - s >= args.min:
-            queued = replayed.get(tick)
+            replay_at = replay_started.get(tick)
             print(f'GPU {s - lo:7.2f}-{e - lo:7.2f} ({e - s:5.2f} ms) tick {tick} from {q} submitted '
-                  f'{"?" if at is None else f"{at - lo:.2f}"} queued {"?" if queued is None else f"{queued - lo:.2f}"}')
+                  f'{"?" if at is None else f"{at - lo:.2f}"} replay_start {"?" if replay_at is None else f"{replay_at - lo:.2f}"}')
     print('busy by submitting slice:', {k: round(v, 2) for k, v in busy_by_queue.most_common()})
 
 
