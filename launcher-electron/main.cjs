@@ -683,6 +683,16 @@ app.whenReady().then(()=>{
         if(!g2dUi.exists||!g2dUi.on||!g2dUi.off)
           throw Error('G2-D read-only-pass UI smoke failed: '+JSON.stringify(g2dUi));
         console.log('ELECTRON_G2D_READONLY_PASS_UI_PASS '+JSON.stringify(g2dUi));
+        const g2gUi=await optionsWindow.webContents.executeJavaScript(
+          "(()=>{const e=document.querySelector('#table-prefetch-trial');"+
+          "if(!e)return {exists:false};const original=e.value;"+
+          "e.value='true';e.dispatchEvent(new Event('change',{bubbles:true}));"+
+          "const on=e.value==='true';e.value='false';"+
+          "e.dispatchEvent(new Event('change',{bubbles:true}));"+
+          "return {exists:true,on,off:e.value==='false',original};})()");
+        if(!g2gUi.exists||!g2gUi.on||!g2gUi.off)
+          throw Error('G2-G prefetch-dedupe UI smoke failed: '+JSON.stringify(g2gUi));
+        console.log('ELECTRON_G2G_PREFETCH_DEDUPE_UI_PASS '+JSON.stringify(g2gUi));
         fs.writeFileSync(path.join(reviewDir,'review-graphics.png'),(await optionsWindow.webContents.capturePage()).toPNG());
         await optionsWindow.webContents.executeJavaScript("document.querySelector('[data-tab=mods]').click()");
         const modUi=await optionsWindow.webContents.executeJavaScript(

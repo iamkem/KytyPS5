@@ -1,4 +1,5 @@
 #include "table-readonly-pass.h"
+#include "table-prefetch-dedupe.h"
 
 // --- Table draws (GPU-driven XPR, docs/GPU-DRIVEN-XPR.md) ------------------------------
 //
@@ -962,6 +963,8 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 	LiveCensus::Scope g2c(LiveCensus::DrawPhase, 0x7ab20, 1); // Eval only; the caller's phase 1 also includes Gather.
 	static thread_local uint32_t g2f_sequence = 0;
 	const bool census_on = LiveCensus::g_on.load(std::memory_order_relaxed) && LiveCensus::g_render;
+	const bool g2g_prefetch_dedupe = kyty_local_table_prefetch_dedupe.load(std::memory_order_relaxed) != 0;
+	TablePrefetchDedupe::State g2g_prefetch_state;
 	std::optional<G2FDiagnostics::Counts> g2f;
 	if (census_on && (++g2f_sequence % G2FDiagnostics::SampleEvery == 0)) g2f.emplace();
 	else if (!census_on) g2f_sequence = 0;
@@ -1026,7 +1029,12 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 			seen = page;
 		}
 		for (auto line = address & ~63ull; line < address + count * 4ull; line += 64) {
-			if (g2f) g2f->NotePrefetch(line); // adjacent repeats within dependency level
+			// Suppress only repeated advisory prefetches; do not skip memory proofs or reads.
+			if (g2g_prefetch_dedupe && g2g_prefetch_state.ShouldSkip(line)) {
+				if (g2f) ++g2f->locate[G2FDiagnostics::SuppressedPrefetch];
+				continue;
+			}
+			if (g2f) g2f->NotePrefetch(line); // actually issued prefetches
 			__builtin_prefetch(reinterpret_cast<const void*>(line));
 		}
 		out = address;
@@ -1058,6 +1066,7 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 		const auto& runs = pair.runs[st];
 		for (size_t begin = 0, end = 0; begin < runs.size(); begin = end) {
 			if (g2f) g2f->BeginLevel();
+			if (g2g_prefetch_dedupe) g2g_prefetch_state.BeginLevel();
 			{
 				LiveCensus::Scope g2e_locate(LiveCensus::DrawPhase, 0x7ab25, 2); // fallback: a whole dependency level.
 				for (end = begin; end < runs.size() && runs[end].level == runs[begin].level; ++end) {
@@ -1171,6 +1180,7 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 		uint32_t   begin = 0;
 		for (const auto end: form.level_ends) {
 			if (g2f) g2f->BeginLevel();
+			if (g2g_prefetch_dedupe) g2g_prefetch_state.BeginLevel();
 			{
 				LiveCensus::Scope g2e_locate(LiveCensus::DrawPhase, 0x7ab25, 2); // packed: all addresses in level.
 				for (auto i = begin; i < end; ++i) {

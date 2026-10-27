@@ -85,6 +85,8 @@ extern "C" {
 [[gnu::used]] volatile std::atomic<uint32_t> kyty_local_table_mru {7};
 // G2-D: experimental, default off. Skip only a provably empty read-only-stage write scan.
 [[gnu::used]] volatile std::atomic<uint32_t> kyty_local_table_readonly_pass_skip {0};
+// G2-G CPU-only, default off: skip repeated advisory cache-line prefetch per dependency level.
+[[gnu::used]] volatile std::atomic<uint32_t> kyty_local_table_prefetch_dedupe {0};
 // 1: NativeXprStateKey hashes the context and the user configuration again only after a change of their registers;
 // 0: at every call; 2: as 1, each key checked against the full hash (STATE-KEY MISMATCH lines, counter
 // shortcut_mismatches).

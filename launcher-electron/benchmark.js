@@ -96,7 +96,7 @@ function draw(s){
     const sample=select('28',1);
     if(!sample)continue;
     const reads=select('27',1),map=select('28',4),hits=select('28',5);
-    const issued=select('28',10),duplicates=select('28',11);
+    const issued=select('28',10),duplicates=select('28',11),suppressed=select('28',12);
     const small=select('27',9),large=select('27',11);
     const watched=select('27',13),cross=select('27',14);
     const watcherChecks=select('27',6);
@@ -108,7 +108,9 @@ function draw(s){
       metric(100*cross/Math.max(1,reads),2)+'% cross-page); '+
       'mapping hits '+metric(100*hits/Math.max(1,map),1)+'%, '+
       'watcher checks '+metric(watcherChecks/sample,2)+'/eval; '+
-      'adjacent prefetch repeats '+metric(100*duplicates/Math.max(1,issued),1)+'%.';
+      'adjacent prefetch repeats '+metric(100*duplicates/Math.max(1,issued),1)+'%, ' +
+      'G2-G suppressed '+metric(suppressed,1)+' sampled lines/frame ('+
+      metric(100*suppressed/Math.max(1,issued+suppressed),1)+'% of attempts).';
     list.append(li);
    }
    censusBox.append(list);

@@ -8,7 +8,7 @@ const defaults = Object.freeze({
   redzone: true, cheats: false, ecores: false, fps120: false, render: 1440,
   ratio: '16:9', quality: 'standard', distance_detail: 'original', distance_tessellation: 'original', vsync: false, hdr: false, framegen: 0,
   hud: 1, streamline: '', safegpu: false, upscaler: 'dlss', render_dlss: 1152,
-  fsr: false, output: '4k', shader_mode: 'standard', scene_benchmark: false, table_readonly_trial: false, lowlatency: true, present_direct: false, antilag: false,
+  fsr: false, output: '4k', shader_mode: 'standard', scene_benchmark: false, table_readonly_trial: false, table_prefetch_trial: false, lowlatency: true, present_direct: false, antilag: false,
   fps30: false, dlss_model: 'auto', gpu: '',
   ram_diet: true, ram16_backing: true, ram_safety: true, vram_budget_mb: 0,
   discord_presence: false, discord_app_id: '', discord_large_image: ''
@@ -20,7 +20,7 @@ const presets = Object.freeze({
   Balanced: Object.freeze({render_dlss:1152,quality:'low',fsr:false,output:'4k',upscaler:'dlss'}),
   Quality: Object.freeze({render_dlss:1440,quality:'standard',fsr:false,output:'4k',upscaler:'dlss'})
 });
-const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing','ram_safety','fps30','discord_presence','scene_benchmark','table_readonly_trial'];
+const booleanKeys = ['fullscreen','aspect','redzone','cheats','ecores','fps120','vsync','hdr','fsr','safegpu','lowlatency','present_direct','antilag','ram_diet','ram16_backing','ram_safety','fps30','discord_presence','scene_benchmark','table_readonly_trial','table_prefetch_trial'];
 const numericKeys = ['language','render','render_dlss','framegen','hud','vram_budget_mb'];
 function clean(candidate = {}) {
   if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) throw Error('Invalid settings object');
@@ -28,7 +28,7 @@ function clean(candidate = {}) {
   for (const key of Object.keys(defaults)) {
     if (!Object.prototype.hasOwnProperty.call(candidate, key)) continue;
     const value = candidate[key];
-    if (booleanKeys.includes(key)) result[key] = Boolean(value);
+    if (booleanKeys.includes(key)) result[key] = key==='table_prefetch_trial' ? value===true : Boolean(value);
     else if (numericKeys.includes(key)) {
       if (Number.isInteger(value) && value >= 0 && value <= 65536) result[key] = value;
     } else if (typeof value === 'string' && value.length < 4096) result[key] = value;
@@ -185,6 +185,8 @@ function buildPlayArgs(root, raw, {inspectTrial = require('./shader-trial.cjs').
   vars.push('KYTY_DISTANCE_TESSELLATION='+s.distance_tessellation);
   // G2-D CPU-only optimization, default off, forced even if launch JSON/inherited env says otherwise.
   vars.push('KYTY_TABLE_READONLY_PASS_SKIP='+(s.table_readonly_trial?'1':'0'));
+  // G2-G isolated CPU prefetch experiment, forced Off unless explicitly selected.
+  vars.push('KYTY_TABLE_PREFETCH_DEDUPE='+(s.table_prefetch_trial?'1':'0'));
   // Use chenxiao's native PAGE_GUARD policy by physical RAM capacity (<=20 GiB).
   // Do not force KYTY_READ_GUARD=1 on machines with more than 20 GiB RAM.
   // The failed texture offload experiment is disabled, without destructive discard.

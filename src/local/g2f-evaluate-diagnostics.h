@@ -17,7 +17,7 @@ enum Reader : size_t {
 enum Locate : size_t {
   SampledEvaluations, CompletedEvaluations, LevelBatches, LocateCalls,
   BoundsRejects, MappingProbes, MappingHits, MappingMisses, MappingFailures,
-  PrefetchIssued, AdjacentPrefetchDuplicates, LocateCount
+  PrefetchIssued, AdjacentPrefetchDuplicates, SuppressedPrefetch, LocateCount
 };
 struct Counts {
   std::array<uint64_t, ReaderCount> reader {};
