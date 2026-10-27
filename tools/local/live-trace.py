@@ -145,7 +145,11 @@ def cmd_frame(t, args):
         if kind == SUBMIT:
             events.append((x, f'guest submit tid {tid} q{a & 0xff} type{(a >> 8) & 0xff} {b} dw'))
         elif kind == FRONT_SUSPEND and tid == t.render:
-            events.append((x, f'render WAIT_REG_MEM {a:#x} == {b:#x}'))
+            # Native event records a failed predicate, not its comparison function or mask.
+            # The packed payload retains only low 32 bits of value/ref, even for 64-bit waits.
+            events.append((x, f'render WAIT_REG_MEM suspended addr={a:#x} '
+                              f'observed_lo32={b >> 32:#x} ref_lo32={b & 0xffffffff:#x} '
+                              '(mask/predicate not recorded)'))
         elif kind == FLIP_SUBMIT and tid == t.render:
             events.append((x, 'FLIP submit (render)'))
     for s, e, tid, address in t.readback_waits:
