@@ -1,8 +1,3 @@
-#include "table-readonly-pass.h"
-#include "table-prefetch-dedupe.h"
-#include "table-unbounded-levels.h"
-#include "g2i-blocks-diagnostics.h"
-
 // --- Table draws (GPU-driven XPR, docs/GPU-DRIVEN-XPR.md) ------------------------------
 //
 // Included by renderDraw.cpp after native-xpr.inc (local Vulkan recording builds only).
@@ -158,10 +153,6 @@ struct RenderExecutor::TablePair {
 	bool                                                        refused  = false;
 	std::array<const ShaderRecompiler::IR::CompiledShaderInfo*, 2> programs {}; // vertex, pixel (null: inactive)
 	std::array<std::vector<Run>, 2>                             runs;
-	// Derived on TableRuns from immutable program metadata. Reset defaults false (fail closed).
-	std::array<bool, 2> readonly_buffer_stage {};
-	// Immutable packed plan metadata; populated with TablePack and reset on plan rebuild.
-	std::array<std::vector<uint8_t>, 2> unbounded_levels;
 	// TableEvaluate's form of a stage's plan (TableRuns, TablePack): every operand an index into one of three arrays (the
 	// stage's user data, its block's slots, the stage's constants), so a draw's evaluation branches on no operand kind.
 	// Both stages' arrays in one block, each operand 16 bits (its array in the top two, its index in the low 14), each
@@ -944,52 +935,11 @@ static uint32_t TableCodeWord(const ShaderRecompiler::IR::TablePlan::Operand& op
 	                                                                                    : static_cast<uint32_t>(address >> 32u);
 }
 
-// G2-F count-only weighted records live in the existing render-thread census table.
-// Add() increments calls by one; sampled events must never masquerade as cycles/ms.
-// Local to renderDraw.cpp to avoid rebuilding common profiler headers.
-static void TableG2FAddCount(uint64_t a, uint64_t b, uint64_t count) {
-	if (count == 0) return;
-	const uint32_t kind = LiveCensus::DrawPhase;
-	const uint64_t hash = (a * 0x9e3779b97f4a7c15ull) ^ (b * 0xc2b2ae3d27d4eb4full) ^ kind;
-	for (size_t probe = 0; probe < LiveCensus::TableSize; ++probe) {
-		auto& entry = LiveCensus::g_table[(hash + probe) & (LiveCensus::TableSize - 1)];
-		if (!entry.used) entry = {a, b, 0, 0, kind, true};
-		else if (entry.a != a || entry.b != b || entry.kind != kind) continue;
-		entry.calls += count;
-		return;
-	}
-}
-
 // The slots of the pair's stages, read into their blocks where the plans address them from the user data and lower
 // slots (a pointer read from memory may hold anything: what is read through it must be mapped), and the T#/S# words
 // they make (TableXpr::words, the set's key) and the pixel stage's LOD statistics words. False: something unmapped.
 bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const uint32_t>, 2> user_data) {
 	LiveCensus::Scope g2c(LiveCensus::DrawPhase, 0x7ab20, 1); // Eval only; the caller's phase 1 also includes Gather.
-	static thread_local uint32_t g2f_sequence = 0;
-	const bool census_on = LiveCensus::g_on.load(std::memory_order_relaxed) && LiveCensus::g_render;
-	const bool g2g_prefetch_dedupe = kyty_local_table_prefetch_dedupe.load(std::memory_order_relaxed) != 0;
-	const bool g2h_unbounded_levels = kyty_local_table_unbounded_levels.load(std::memory_order_relaxed) != 0;
-	TablePrefetchDedupe::State g2g_prefetch_state;
-	std::optional<G2FDiagnostics::Counts> g2f;
-	if (census_on && (++g2f_sequence % G2FDiagnostics::SampleEvery == 0)) g2f.emplace();
-	else if (!census_on) g2f_sequence = 0;
-	struct G2FFlush {
-		std::optional<G2FDiagnostics::Counts>& counters;
-		uint64_t queue;
-		bool success = false;
-		~G2FFlush() {
-			if (!counters) return;
-			auto& c = *counters;
-			c.locate[G2FDiagnostics::SampledEvaluations] = 1;
-			if (success) c.locate[G2FDiagnostics::CompletedEvaluations] = 1;
-			for (size_t i = 0; i < c.reader.size(); ++i)
-				TableG2FAddCount(0x7ab27, (i + 1) | queue, c.reader[i]);
-			for (size_t i = 0; i < c.locate.size(); ++i)
-				TableG2FAddCount(0x7ab28, (i + 1) | queue, c.locate[i]);
-			for (size_t i = 0; i < c.packed.size(); ++i)
-				TableG2FAddCount(0x7ab29, (i + 1) | queue, c.packed[i]);
-		}
-	} g2f_flush {g2f, LiveCensus::g_queue};
 	const auto g2e_setup = (LiveCensus::g_on.load(std::memory_order_relaxed) && LiveCensus::g_render) ? __rdtsc() : 0;
 	auto&      table     = OwnTable();
 	const auto stages    = pair.programs[1] != nullptr ? 2u : 1u;
@@ -1002,7 +952,7 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 	auto& words = table.words;
 	words.clear();
 	table.lod_stats.clear();
-	NativeXprReader reader(resources, g2f ? &*g2f : nullptr);
+	NativeXprReader reader(resources);
 	// One setup interval; no overlapping timer lives across dependency levels.
 	if (g2e_setup != 0) LiveCensus::Add(LiveCensus::DrawPhase, 0x7ab25, 1 | LiveCensus::g_queue, __rdtsc() - g2e_setup);
 	// A run's address, its pages proven mapped and its lines loading.
@@ -1010,12 +960,10 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 	// path's evaluation, which fails past it: so does this one.)
 	const auto locate = [&](uint64_t low, uint64_t high, uint32_t offset, int32_t immediate, uint32_t count,
 	                        uint64_t& out, bool bounded = false, uint32_t records = 0) {
-		if (g2f) ++g2f->locate[G2FDiagnostics::LocateCalls];
 		if (bounded) {
 			const auto stride = (static_cast<uint32_t>(high) >> 16u) & 0x3fffu;
 			const auto size   = stride == 0 ? uint64_t {records} : uint64_t {stride} * records;
 			if (immediate < 0 || static_cast<uint64_t>(immediate) + count * 4ull > size) {
-				if (g2f) ++g2f->locate[G2FDiagnostics::BoundsRejects];
 				return false;
 			}
 		}
@@ -1023,25 +971,16 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 		                     static_cast<uint64_t>(int64_t {immediate});
 		for (auto page = address >> 14u; page <= (address + count * 4ull - 1) >> 14u; ++page) {
 			auto& seen = table.mapped[page & 255u];
-			if (g2f) ++g2f->locate[G2FDiagnostics::MappingProbes];
 			if (seen == page) {
-				if (g2f) ++g2f->locate[G2FDiagnostics::MappingHits];
 				continue;
 			}
-			if (g2f) ++g2f->locate[G2FDiagnostics::MappingMisses];
 			if (!Libs::LibKernel::Memory::IsFullyMapped(page << 14u, 16384)) {
-				if (g2f) ++g2f->locate[G2FDiagnostics::MappingFailures];
 				return false;
 			}
 			seen = page;
 		}
 		for (auto line = address & ~63ull; line < address + count * 4ull; line += 64) {
-			// Suppress only repeated advisory prefetches; do not skip memory proofs or reads.
-			if (g2g_prefetch_dedupe && g2g_prefetch_state.ShouldSkip(line)) {
-				if (g2f) ++g2f->locate[G2FDiagnostics::SuppressedPrefetch];
-				continue;
-			}
-			if (g2f) g2f->NotePrefetch(line); // actually issued prefetches
+			// Advisory prefetch only: mapping proofs and all guest reads remain mandatory.
 			__builtin_prefetch(reinterpret_cast<const void*>(line));
 		}
 		out = address;
@@ -1072,8 +1011,6 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 		};
 		const auto& runs = pair.runs[st];
 		for (size_t begin = 0, end = 0; begin < runs.size(); begin = end) {
-			if (g2f) g2f->BeginLevel();
-			if (g2g_prefetch_dedupe) g2g_prefetch_state.BeginLevel();
 			{
 				LiveCensus::Scope g2e_locate(LiveCensus::DrawPhase, 0x7ab25, 2); // fallback: a whole dependency level.
 				for (end = begin; end < runs.size() && runs[end].level == runs[begin].level; ++end) {
@@ -1185,43 +1122,16 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 		const std::array<const uint32_t*, 3> bases {user_data[st].data(), slots.data(), form.constants.data()};
 		const auto get = [&](uint16_t operand) { return bases[operand >> 14u][operand & 0x3fffu]; };
 		uint32_t   begin = 0;
-		size_t     level_index = 0;
 		for (const auto end: form.level_ends) {
-			const bool unbounded = level_index < pair.unbounded_levels[st].size() && pair.unbounded_levels[st][level_index] != 0;
-			const bool specialized = g2h_unbounded_levels && unbounded;
-			++level_index;
-			if (g2f) {
-				++g2f->packed[G2FDiagnostics::Levels];
-				g2f->packed[G2FDiagnostics::Runs] += end - begin;
-				if (unbounded) {
-					++g2f->packed[G2FDiagnostics::UnboundedLevels];
-					g2f->packed[G2FDiagnostics::UnboundedRuns] += end - begin;
-				}
-				if (specialized) {
-					++g2f->packed[G2FDiagnostics::OptimizedLevels];
-					g2f->packed[G2FDiagnostics::OptimizedRuns] += end - begin;
-				}
-			}
-			if (g2f) g2f->BeginLevel();
-			if (g2g_prefetch_dedupe) g2g_prefetch_state.BeginLevel();
 			{
 				LiveCensus::Scope g2e_locate(LiveCensus::DrawPhase, 0x7ab25, 2); // packed: all addresses in level.
-				if (specialized) {
-					// Immutable metadata proves that no run in this level has bounded range metadata.
-					for (auto i = begin; i < end; ++i) {
-						const auto& run = form.runs[i];
-						if (!locate(get(run.address[0]), get(run.address[1]), get(run.address[2]), run.immediate, run.count,
-						            table.addresses[i]))
-							return false;
-					}
-				} else {
-					for (auto i = begin; i < end; ++i) {
-						const auto& run     = form.runs[i];
-						const bool  bounded = run.records != TablePair::PackedRun::NotBounded;
-						if (!locate(get(run.address[0]), get(run.address[1]), get(run.address[2]), run.immediate, run.count,
-						            table.addresses[i], bounded, bounded ? get(run.records) : 0))
-							return false;
-					}
+
+				for (auto i = begin; i < end; ++i) {
+					const auto& run     = form.runs[i];
+					const bool  bounded = run.records != TablePair::PackedRun::NotBounded;
+					if (!locate(get(run.address[0]), get(run.address[1]), get(run.address[2]), run.immediate, run.count,
+					            table.addresses[i], bounded, bounded ? get(run.records) : 0))
+						return false;
 				}
 			}
 			{
@@ -1251,7 +1161,6 @@ bool RenderExecutor::TableEvaluate(TablePair& pair, std::array<std::span<const u
 		}
 		if (!indirect(st)) return false;
 	}
-	g2f_flush.success = true;
 	return true;
 }
 
@@ -1357,47 +1266,9 @@ void RenderExecutor::TableGather(const TablePair& pair, std::array<std::span<con
 	table.gathered = &pair;
 }
 
-// G2-I: flush only at sampled TableBlocks invocation exit, never for each descriptor.
-// Same per-render-thread table/hash protocol as LiveCensus; cycles represent only
-// sampled operations, not the full native-flip CPU cost.
-static void TableG2IAddCycles(uint64_t b, uint64_t count, uint64_t cycles) {
-	if (count == 0) return;
-	constexpr uint32_t kind = LiveCensus::DrawPhase;
-	constexpr uint64_t a = 0x7ab2b;
-	const uint64_t hash = (a * 0x9e3779b97f4a7c15ull) ^ (b * 0xc2b2ae3d27d4eb4full) ^ kind;
-	for (size_t probe = 0; probe < LiveCensus::TableSize; ++probe) {
-		auto& entry = LiveCensus::g_table[(hash + probe) & (LiveCensus::TableSize - 1)];
-		if (!entry.used) entry = {a, b, 0, 0, kind, true};
-		else if (entry.a != a || entry.b != b || entry.kind != kind) continue;
-		entry.calls += count;
-		entry.cycles += cycles;
-		return;
-	}
-}
-
 bool RenderExecutor::TableBlocks(TablePair& pair, std::array<std::span<const uint32_t>, 2> user_data,
                                  std::array<vk::DeviceAddress, 2>& blocks, bool* writes) {
 	LiveCensus::Scope g2c(LiveCensus::DrawPhase, 0x7ab21, 2); // Includes buffer resolve, ring and final block upload.
-	static thread_local uint32_t g2i_sequence = 0;
-	const bool census_on = LiveCensus::g_on.load(std::memory_order_relaxed) && LiveCensus::g_render;
-	std::optional<G2IBlocksDiagnostics::Counts> g2i;
-	if (census_on && (++g2i_sequence % G2IBlocksDiagnostics::SampleEvery == 0)) g2i.emplace();
-	else if (!census_on) g2i_sequence = 0;
-	struct G2IFlush {
-		std::optional<G2IBlocksDiagnostics::Counts>& sampled;
-		uint64_t queue;
-		bool success = false;
-		~G2IFlush() {
-			if (!sampled) return;
-			auto& c = *sampled;
-			c.counts[G2IBlocksDiagnostics::SampledCalls] = 1;
-			if (success) c.counts[G2IBlocksDiagnostics::CompletedCalls] = 1;
-			for (size_t i = 0; i < c.counts.size(); ++i)
-				TableG2FAddCount(0x7ab2a, (i + 1) | queue, c.counts[i]);
-			for (size_t i = 0; i < c.cycles.size(); ++i)
-				TableG2IAddCycles((i + 1) | queue, c.timed_calls[i], c.cycles[i]);
-		}
-	} g2i_flush {g2i, LiveCensus::g_queue};
 	using Kind         = ShaderRecompiler::IR::TablePlan::Operand::Kind;
 	auto&      table        = OwnTable();
 	auto&      buffer_cache = m_context.GetBufferCache();
@@ -1487,9 +1358,7 @@ bool RenderExecutor::TableBlocks(TablePair& pair, std::array<std::span<const uin
 	};
 	if (table.gathered != &pair) TableGather(pair, user_data);
 	table.gathered = nullptr; // (taken: a later draw or dispatch gathers its own)
-	const bool readonly_pass_skip = kyty_local_table_readonly_pass_skip.load(std::memory_order_relaxed) != 0;
 	for (uint32_t st = 0; st < stages; ++st) {
-		if (g2i) ++g2i->counts[G2IBlocksDiagnostics::Stages];
 		const auto& program = *pair.programs[st];
 		const auto& plan    = program.table_plan;
 		auto&       block   = table.blocks[st];
@@ -1497,25 +1366,12 @@ bool RenderExecutor::TableBlocks(TablePair& pair, std::array<std::span<const uin
 		// The buffers it writes first: a range it also reads through another V# is GPU-written by then, as the
 		// normal path's second lookup (RebindBuffers) sees it (not a copy of the guest's bytes in the ring).
 		const size_t buffers = plan.buffers.size();
-		const bool eligible = pair.readonly_buffer_stage[st] && buffers != 0;
-		const bool skip_write_pass = readonly_pass_skip && eligible;
-		if (eligible && LiveCensus::g_on.load(std::memory_order_relaxed) && LiveCensus::g_render) {
-			// Count one eligible stage per call with length and switch state encoded in b.
-			// No per-buffer probes, no shared LiveCounters schema changes or game-side writes.
-			LiveCensus::Add(LiveCensus::DrawPhase, 0x7ab24,
-			                (static_cast<uint64_t>(buffers) << 8u) | uint64_t {skip_write_pass} | LiveCensus::g_queue, 0);
-		}
-		for (size_t n = TableReadOnlyPass::Begin(readonly_pass_skip, eligible, buffers); n < 2 * buffers; ++n) {
+		for (size_t n = 0; n < 2 * buffers; ++n) {
 			const auto  i         = n < buffers ? n : n - buffers;
 			const auto& words4    = entries[i].first;
 			const auto& resource  = program.info.buffers[i];
 			const bool  formatted = resource.formatted;
 			if ((resource.written || resource.atomic) != (n < plan.buffers.size())) continue;
-			if (g2i) {
-				++g2i->counts[G2IBlocksDiagnostics::Descriptors];
-				++g2i->counts[(resource.written || resource.atomic) ?
-				    G2IBlocksDiagnostics::WritableDescriptors : G2IBlocksDiagnostics::ReadonlyDescriptors];
-			}
 			if (!specialized(resource, words4)) {
 				if (ShaderRecompiler::IR::RuntimeBufferFormat(resource) && i < 32 && ((pair.portable[st] >> i) & 1u) == 0) {
 					pair.portable[st] |= 1u << i;
@@ -1542,12 +1398,7 @@ bool RenderExecutor::TableBlocks(TablePair& pair, std::array<std::span<const uin
 						if (image_starts(address)) return false;
 						proof.image_checked = true;
 					}
-					const uint64_t g2i_acquire_start = g2i ? __rdtsc() : 0;
 					const auto [owner, offset] = buffer_cache.ObtainBuffer(address, size, true, formatted);
-					if (g2i) {
-						g2i->AddTime(G2IBlocksDiagnostics::WritableObtain, __rdtsc() - g2i_acquire_start);
-						++g2i->counts[G2IBlocksDiagnostics::WritableObtainCalls];
-					}
 					region_epochs.fill({UINT64_MAX, 0}); // (its uploads may have moved them)
 					if (owner == nullptr || buffer_cache.GetBufferIfLive(buffer_cache.FindBuffer(address, size)) != owner)
 						return false;
@@ -1572,7 +1423,6 @@ bool RenderExecutor::TableBlocks(TablePair& pair, std::array<std::span<const uin
 				    !buffer_cache.IsRegionGpuModified(held.address, held.size)) {
 					LiveCounters::Add(LiveCounters::TableRingShared);
 					LiveCounters::Add(LiveCounters::TableRingSharedBytes, held.size);
-					if (g2i) ++g2i->counts[G2IBlocksDiagnostics::ReadonlyReused];
 					const auto [word, stride]      = word_of(words4);
 					block[plan.BufferDword(i)]     = static_cast<uint32_t>(held.device);
 					block[plan.BufferDword(i) + 1] = static_cast<uint32_t>(held.device >> 32u);
@@ -1599,7 +1449,6 @@ bool RenderExecutor::TableBlocks(TablePair& pair, std::array<std::span<const uin
 				}
 			}
 			if (!current) {
-				if (g2i) ++g2i->counts[G2IBlocksDiagnostics::ReadonlyResolves];
 				LiveCensus::Scope resolve(LiveCensus::DrawPhase, 0x7ab1e, 5);
 				// (Kept only once resolved: a refusal leaves nothing a later use could take.)
 				held = {};
@@ -1678,7 +1527,6 @@ bool RenderExecutor::TableBlocks(TablePair& pair, std::array<std::span<const uin
 				}
 				held = fresh;
 			}
-			if (g2i && current) ++g2i->counts[G2IBlocksDiagnostics::ReadonlyReused];
 			const auto [word, stride]      = word_of(words4);
 			block[plan.BufferDword(i)]     = static_cast<uint32_t>(held.device);
 			block[plan.BufferDword(i) + 1] = static_cast<uint32_t>(held.device >> 32u);
@@ -1687,19 +1535,10 @@ bool RenderExecutor::TableBlocks(TablePair& pair, std::array<std::span<const uin
 			block[plan.BufferDword(i) + 4] = stride;
 		}
 		if (plan.BlockDwords() != 0) { // a stage with neither slots nor buffers reads no block
-			const size_t g2i_bytes = block.size() * sizeof(uint32_t);
-			const uint64_t g2i_upload_start = g2i ? __rdtsc() : 0;
-			blocks[st] = upload.BufferDeviceAddress() + upload.Copy(block.data(), g2i_bytes, 16);
-			if (g2i) {
-				g2i->AddTime(G2IBlocksDiagnostics::FinalUpload, __rdtsc() - g2i_upload_start);
-				++g2i->counts[G2IBlocksDiagnostics::UploadCalls];
-				g2i->counts[G2IBlocksDiagnostics::UploadBytes] += g2i_bytes;
-			}
-		} else if (g2i) {
-			++g2i->counts[G2IBlocksDiagnostics::EmptyStages];
+			const size_t block_bytes = block.size() * sizeof(uint32_t);
+			blocks[st] = upload.BufferDeviceAddress() + upload.Copy(block.data(), block_bytes, 16);
 		}
 	}
-	g2i_flush.success = true;
 	return true;
 }
 
@@ -2000,16 +1839,11 @@ RenderExecutor::TableResult RenderExecutor::TableDraw(CommandBuffer& buffer, Tab
 // The pair's runs (TablePair::Run): the slots its stages evaluate, in reads of consecutive slots, by level.
 void RenderExecutor::TableRuns(TablePair& pair) {
 	using Kind  = ShaderRecompiler::IR::TablePlan::Operand::Kind;
-	pair.readonly_buffer_stage = {}; // Recompute on every shader replacement / pair respecialization.
-	for (auto& flags : pair.unbounded_levels) flags.clear();
 	auto& table = *m_table_xpr;
 	std::array<TableFlatStage, 2> flat_forms; // (packed into the pair: TablePack)
 	for (uint32_t st = 0; st < 2; ++st) {
 		if (pair.programs[st] == nullptr) continue;
 		const auto&           plan = pair.programs[st]->table_plan;
-		const auto&           info = pair.programs[st]->info.buffers;
-		// A missing/unsupported/mismatched plan is not eligible; the old loop remains intact.
-		pair.readonly_buffer_stage[st] = pair.programs[st]->table_mode && TableReadOnlyPass::Eligible(plan.buffers.size(), info);
 		std::vector<uint32_t> levels(plan.slots.size(), 0);
 		const auto            same = [](const ShaderRecompiler::IR::TablePlan::Operand& a,
 		                     const ShaderRecompiler::IR::TablePlan::Operand& b) {
@@ -2076,12 +1910,6 @@ void RenderExecutor::TableRuns(TablePair& pair) {
 			for (const auto& word: words) flat.buffer_words.push_back(flat_of(word));
 	}
 	TablePack(pair, flat_forms);
-	for (uint32_t st = 0; st < 2; ++st) {
-		if (!pair.packed[st].valid) continue; // Invalid plans always fall back to the original operands path.
-		const auto& packed = pair.packed[st];
-		pair.unbounded_levels[st] = TableUnboundedLevels::Compute(packed.runs, packed.level_ends,
-		    [](const TablePair::PackedRun& run) { return run.records == TablePair::PackedRun::NotBounded; });
-	}
 }
 
 // The pair's flat forms packed into one block (TablePair::packed): a stage whose operand indices, counts or levels do not

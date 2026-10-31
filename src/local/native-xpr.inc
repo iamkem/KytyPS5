@@ -1,5 +1,3 @@
-#include "g2f-evaluate-diagnostics.h"
-
 // --- Native XPR draws --------------------------------------------------------
 //
 // Included by renderDraw.cpp (local Vulkan recording builds only). The normal
@@ -83,12 +81,6 @@ extern "C" {
 // Table lookups that ask the last answer first (bits): 1 the pair cache's 4096 entries (else 256), 2 the pair's variant
 // found last, 4 the pair's image set before the last (TableTry, TableSet).
 [[gnu::used]] volatile std::atomic<uint32_t> kyty_local_table_mru {7};
-// G2-D: experimental, default off. Skip only a provably empty read-only-stage write scan.
-[[gnu::used]] volatile std::atomic<uint32_t> kyty_local_table_readonly_pass_skip {0};
-// G2-G CPU-only, default off: skip repeated advisory cache-line prefetch per dependency level.
-[[gnu::used]] volatile std::atomic<uint32_t> kyty_local_table_prefetch_dedupe {0};
-// G2-H packed TableEvaluate: hoist immutable unbounded-run metadata per dependency level, default off.
-[[gnu::used]] volatile std::atomic<uint32_t> kyty_local_table_unbounded_levels {0};
 // 1: NativeXprStateKey hashes the context and the user configuration again only after a change of their registers;
 // 0: at every call; 2: as 1, each key checked against the full hash (STATE-KEY MISMATCH lines, counter
 // shortcut_mismatches).
@@ -189,22 +181,15 @@ uint32_t NativeXprReadGuestWord(uint64_t address) {
 
 // The way the SRT evaluation reads a range: spans through the watched-page aware
 // span reader, single words otherwise.
-void NativeXprReadWords(uint64_t address, uint32_t count, uint32_t* out,
-                        G2FDiagnostics::Counts* diagnostic = nullptr) {
-	using namespace G2FDiagnostics;
+void NativeXprReadWords(uint64_t address, uint32_t count, uint32_t* out) {
 	for (uint32_t done = 0; done < count;) {
 		const uint32_t chunk = std::min<uint32_t>(count - done, 16);
 		const auto     at    = address + 4ull * done;
 		bool span_ok = false;
-		if (chunk >= 2) {
-			if (diagnostic) ++diagnostic->reader[SpanAttempts];
+		if (chunk >= 2)
 			span_ok = Libs::LibKernel::Memory::TryReadGpuShaderSpan(at, out + done, chunk * 4ull, false);
-			if (diagnostic) ++diagnostic->reader[span_ok ? SpanSuccess : SpanFailure];
-		}
-		if (!span_ok) {
-			if (diagnostic) diagnostic->reader[WordFallbackWords] += chunk;
+		if (!span_ok)
 			for (uint32_t i = 0; i < chunk; ++i) out[done + i] = NativeXprReadGuestWord(at + 4ull * i);
-		}
 		done += chunk;
 	}
 }
@@ -2562,73 +2547,42 @@ RenderExecutor::NativeXprPatch RenderExecutor::NativeXprPatchDescriptors(NativeX
 // evaluation's readers. The page answer is kept for one validation.
 class NativeXprReader {
 public:
-	explicit NativeXprReader(GpuResourceManager& resources, G2FDiagnostics::Counts* diagnostics = nullptr)
-	    : m_resources(resources), m_granules(resources.ReadGranules()), m_diagnostics(diagnostics) {}
-	void Read(uint64_t address, uint32_t count, uint32_t* out) {
-		if (m_diagnostics) ReadImpl<true>(address, count, out);
-		else ReadImpl<false>(address, count, out);
-	}
-
-private:
-	// (no_builtin: the short copy loop below stays a loop, not a memcpy call.)
-	template <bool Diagnose>
-	__attribute__((no_builtin("memcpy"))) void ReadImpl(uint64_t address, uint32_t count, uint32_t* out) {
-		using namespace G2FDiagnostics;
-		if constexpr (Diagnose) {
-			++m_diagnostics->reader[ReadCalls];
-			m_diagnostics->reader[ReadWords] += count;
-		}
+	explicit NativeXprReader(GpuResourceManager& resources)
+	    : m_resources(resources), m_granules(resources.ReadGranules()) {}
+	// Keep the same ordering: granule acquire → watcher proof → short/large direct
+	// copy, or watched/cross-page fallback with the normal guest read semantics.
+	__attribute__((no_builtin("memcpy"))) void Read(uint64_t address, uint32_t count, uint32_t* out) {
 		const uint64_t bytes = uint64_t {count} * 4u;
 		const uint64_t first = address >> 12u, last = (address + bytes - 1u) >> 12u;
 		if (first == last) {
 			if (first != m_page) {
-				if constexpr (Diagnose) ++m_diagnostics->reader[NewPage];
 				m_page = first;
-				// The granule bit fast path and the exact watcher query are unchanged.
 				const auto granule = first >> (PageManager::READ_GRANULE_BITS - 12u);
 				const bool clean_granule = address < TRACKER_ADDRESS_SIZE &&
 				    ((m_granules[granule / 64u].load(std::memory_order_acquire) >> (granule % 64u)) & 1u) == 0;
 				if (clean_granule) {
-					if constexpr (Diagnose) ++m_diagnostics->reader[GranuleClear];
 					m_direct = true;
 				} else {
-					if constexpr (Diagnose) ++m_diagnostics->reader[WatcherChecks];
 					const bool watched = m_resources.HasReadWatchers(first << 12u, 4096);
-					if constexpr (Diagnose) ++m_diagnostics->reader[watched ? WatcherPresent : WatcherAbsent];
 					m_direct = !watched;
 				}
-			} else {
-				if constexpr (Diagnose) ++m_diagnostics->reader[PageReuse];
 			}
 			if (m_direct) {
 				if (count <= 16) {
-					if constexpr (Diagnose) {
-						++m_diagnostics->reader[DirectSmallCalls];
-						m_diagnostics->reader[DirectSmallWords] += count;
-					}
-					// Inline ≤16 words; identical guest reads and ordering with census off.
 					const auto* from = reinterpret_cast<const uint32_t*>(address);
 					for (uint32_t i = 0; i < count; ++i) out[i] = from[i];
 					return;
 				}
-				if constexpr (Diagnose) {
-					++m_diagnostics->reader[DirectLargeCalls];
-					m_diagnostics->reader[DirectLargeWords] += count;
-				}
 				std::memcpy(out, reinterpret_cast<const void*>(address), bytes);
 				return;
 			}
-			if constexpr (Diagnose) ++m_diagnostics->reader[WatchedFallbackCalls];
-		} else {
-			if constexpr (Diagnose) ++m_diagnostics->reader[CrossPageCalls];
 		}
-		if constexpr (Diagnose) NativeXprReadWords(address, count, out, m_diagnostics);
-		else NativeXprReadWords(address, count, out);
+		NativeXprReadWords(address, count, out);
 	}
 
+private:
 	GpuResourceManager&          m_resources;
 	const std::atomic<uint64_t>* m_granules;
-	G2FDiagnostics::Counts*      m_diagnostics = nullptr;
 	uint64_t                     m_page   = UINT64_MAX;
 	bool                         m_direct = false;
 };

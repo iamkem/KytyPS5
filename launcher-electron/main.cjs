@@ -680,36 +680,6 @@ app.whenReady().then(()=>{
         if(modeInteraction.mode!=='standard'||!modeInteraction.restoreDisabled)
           throw Error('Shader Standard rollback UI failed: '+JSON.stringify(modeInteraction));
         console.log('ELECTRON_SHADER_MODE_ROLLBACK_UI_PASS '+JSON.stringify(modeInteraction));
-        const g2dUi=await optionsWindow.webContents.executeJavaScript(
-          "(()=>{const e=document.querySelector('#table-readonly-trial');"+
-          "if(!e)return {exists:false};const original=e.value;"+
-          "e.value='true';e.dispatchEvent(new Event('change',{bubbles:true}));"+
-          "const on=e.value==='true';e.value='false';"+
-          "e.dispatchEvent(new Event('change',{bubbles:true}));"+
-          "return {exists:true,on,off:e.value==='false',original};})()");
-        if(!g2dUi.exists||!g2dUi.on||!g2dUi.off)
-          throw Error('G2-D read-only-pass UI smoke failed: '+JSON.stringify(g2dUi));
-        console.log('ELECTRON_G2D_READONLY_PASS_UI_PASS '+JSON.stringify(g2dUi));
-        const g2gUi=await optionsWindow.webContents.executeJavaScript(
-          "(()=>{const e=document.querySelector('#table-prefetch-trial');"+
-          "if(!e)return {exists:false};const original=e.value;"+
-          "e.value='true';e.dispatchEvent(new Event('change',{bubbles:true}));"+
-          "const on=e.value==='true';e.value='false';"+
-          "e.dispatchEvent(new Event('change',{bubbles:true}));"+
-          "return {exists:true,on,off:e.value==='false',original};})()");
-        if(!g2gUi.exists||!g2gUi.on||!g2gUi.off)
-          throw Error('G2-G prefetch-dedupe UI smoke failed: '+JSON.stringify(g2gUi));
-        console.log('ELECTRON_G2G_PREFETCH_DEDUPE_UI_PASS '+JSON.stringify(g2gUi));
-        const g2hUi=await optionsWindow.webContents.executeJavaScript(
-          "(()=>{const e=document.querySelector('#table-unbounded-trial');"+
-          "if(!e)return {exists:false};const original=e.value;"+
-          "e.value='true';e.dispatchEvent(new Event('change',{bubbles:true}));"+
-          "const on=e.value==='true';e.value='false';"+
-          "e.dispatchEvent(new Event('change',{bubbles:true}));"+
-          "return {exists:true,on,off:e.value==='false',original};})()");
-        if(!g2hUi.exists||!g2hUi.on||!g2hUi.off)
-          throw Error('G2-H unbounded-level UI smoke failed: '+JSON.stringify(g2hUi));
-        console.log('ELECTRON_G2H_UNBOUNDED_LEVELS_UI_PASS '+JSON.stringify(g2hUi));
         fs.writeFileSync(path.join(reviewDir,'review-graphics.png'),(await optionsWindow.webContents.capturePage()).toPNG());
         await optionsWindow.webContents.executeJavaScript("document.querySelector('[data-tab=mods]').click()");
         const modUi=await optionsWindow.webContents.executeJavaScript(

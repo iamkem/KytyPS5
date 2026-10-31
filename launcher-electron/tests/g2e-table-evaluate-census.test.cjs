@@ -32,7 +32,7 @@ test('packed and fallback preserve mapping before dependent reads per dependency
  assert.ok(packed.indexOf('g2e_locate')<packed.indexOf('g2e_read'));
  assert.ok(packed.indexOf('if (!locate(')<packed.indexOf('reader.Read('));
  assert.ok(evaluation.includes('begin = end;'));
- assert.match(evaluation,/NativeXprReader reader\(resources, g2f \? &\*g2f : nullptr\)/);
+ assert.match(evaluation,/NativeXprReader reader\(resources\)/);
 });
 test('fallback and indirect preserve original short-circuit and validity checks',()=>{
  assert.ok(evaluation.includes('if (!by_operands(st) || !indirect(st)) return false;'));

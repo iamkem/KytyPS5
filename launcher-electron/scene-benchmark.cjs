@@ -278,7 +278,7 @@ function census(session,{seconds=5,sleep=5,interval=400,timeoutMs=32000}={}){
             }
             if(line.trim()==='LIVE_DONE id='+id){
               if(!header||header.frames<2||entries.length===0)throw Error('CPU census completed without usable instrumented frames.');
-              const focusKeys=new Set(['000000000007ab20','000000000007ab21','000000000007ab22','000000000007ab23','000000000007ab24','000000000007ab25','000000000007ab26','000000000007ab27','000000000007ab28','000000000007ab29','000000000007ab2a','000000000007ab2b']);
+              const focusKeys=new Set(['000000000007ab20','000000000007ab21','000000000007ab22','000000000007ab23','000000000007ab25','000000000007ab26']);
               const report={schemaVersion:1,type:'census',id,mode:session.mode,label:session.mode==='experimental'?'trial-census':'std-census',
                 durationSeconds:seconds,pairedMeasurementId:session.results.at(-1)?.id??null,
                 at:new Date().toISOString(),

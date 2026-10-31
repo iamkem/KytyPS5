@@ -1,6 +1,6 @@
 # KytyPS5 — experiment retirement review (2026-10-31)
 
-**Purpose:** keep the working tree focused on proven performance and correctness work. History retains original measurements and removed one-off phase reports. This first PR is **documentation-only cleanup**, not a claim that runtime trial code has been deleted or performance has improved.
+**Purpose:** keep the working tree focused on proven performance and correctness work. History retains original measurements and removed one-off phase reports. The initial PR #2 archived documents. The follow-up on 2026-10-31 removes retired native code, Launcher options and diagnostics; no measured FPS improvement is claimed.
 
 ## Grounded decisions
 
@@ -23,16 +23,15 @@
 
 Original measurements are recoverable from Git history. Keep `docs/G2H_ON_ONLY_CENSUS_RESULTS_2026-10-27.md` as the only documented historical 49.635-native-FPS reference, `docs/G3*` for dependency/correctness findings and `docs/NATIVE_60FPS_TARGET_G3_2026-10-27.md` for the finite acceptance target.
 
-## Runtime trial cleanup — still required, not performed in this docs-only PR
+## Runtime trial cleanup — implemented 2026-10-31
 
-When DevSpace Windows becomes available, remove G2-D/G2-G/G2-H native trial flags and opt-in code **together** across:
+- Removed G2-D/G2-G/G2-H native experimental branches and switches in `src/local/table-xpr.inc`, `native-xpr.inc`, and `performance-switches.h`; restored the original flags-Off paths, including writable-first two-pass ownership and bounded guest read checks. The active Table/XPR renderer, BDA/PM4/Vulkan synchronization, buffer ownership proofs and existing generic LiveCensus remain.
+- Removed G2-F/G2-I one-off sampled instrumentation and 15 trial-only native headers, policy-test sources and Launcher tests. Generic CPU Census and optional GPU Timeline remain.
+- Removed the three UI selectors and configuration/environment assignments from Electron Launcher, along with G2-specific benchmark presentation. Existing `launcher-settings.json` is not modified during migration: `clean()` ignores obsolete JSON keys.
+- Added `launcher-electron/tests/retired-trials-cleanup.test.cjs` to check legacy setting rejection and the retained guest-memory and buffer-safety invariants. **116/116 Electron/Node tests PASS**. Canonical native build `cmake --build _Build/latest/native-build --target kyty_emulator --parallel 1` **PASS**, existing unrelated compiler warnings only.
+- No emulator gameplay was launched for pixel/FPS certification. The historical ~49.64 FPS was with G2-H On and may not represent the retired-path frame time. Do not claim matched baseline or automatic uplift.
 
-- `src/local/table-xpr.inc`, `src/local/native-xpr.inc` and `src/local/performance-switches.h`
-- trial-only helper headers `src/local/table-readonly-pass.h`, `src/local/table-prefetch-dedupe.h`, `src/local/table-unbounded-levels.h`; native policy tests and CMake test registrations
-- `launcher-electron/logic.cjs`, `options.js`, `options.html`, relevant Launcher tests and settings migration (old JSON flags ignored with no effects)
-- any related runner/test/docs references, but **not** main Vulkan/PM4/TBL, shader caches, readback queue or protections.
-
-Preserve default player experience, host/GPU synchronization, guest memory observation order, compilation correctness and prior performance baseline. **Do not remove** the separate XPR Table renderer, shader cache, upstream fixes or the Scene Benchmark utility.
+**Do not remove** the separate XPR Table renderer, shader cache, readback queue, RAM/PGO protections or Scene Benchmark utility. No game/shader cache, save, mod, or personal file was removed.
 
 ## Upstream sync gate
 
@@ -42,4 +41,4 @@ Source: `chenxiao07/KytyPS5` `experiment/perf-40fps-20260926` HEAD `7de6fd9e` (2
 
 Never automatically delete ignored `_Build/`, `_SaveData/`, `_SaveData.rar`, `_Mods/`, `_PipelineCache/`, shader cache, `launcher-settings.json`, `game-path.txt`, proprietary game files, user's nontracked documents or backups. Deleting even an old experimental build folder may destroy logs or a launch path; check ownership/runtime state first.
 
-**Status:** this PR removes only the six archived docs files above; no native code, Launcher, build/test/run or cached/user data changed.
+**Status:** tracked runtime trial removal is complete and built/tested offline. No runtime/gameplay FPS result yet. Generated `_Build/` archival directories remain protected until explicit ownership/process checks and supported Windows deletion path. Separate upstream merge remains gated by conflict resolution and native validation.

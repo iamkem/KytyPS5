@@ -5,19 +5,9 @@ const kindNames=['Dispatch','Draw','Native XPR','Dispatch phase','GPU wait','Rea
 function censusName(e){
  if(e.kind!==12)return kindNames[e.kind]||'Kind '+e.kind;
  const phase=parseInt(e.b.slice(-2),16);
- if(e.a==='000000000007ab24'){
-  const words=(parseInt(e.b.slice(-4),16)>>8)&255;
-  const skipped=(parseInt(e.b.slice(-2),16)&1)!==0;
-  return 'G2-D '+(skipped?'skipped':'eligible')+' write scan · '+words+' buffers'+(e.b.startsWith('8')?' (async)':'');
- }
  const detailed={
   '000000000007ab25':{1:'G2-E setup / mapping epoch',2:'G2-E locate + page checks + prefetch',3:'G2-E dependent NativeXprReader reads',4:'G2-E descriptor / LOD words',5:'G2-E indirect image enumeration'},
   '000000000007ab26':{1:'G2-E packed path (count only)',2:'G2-E fallback operand path (count only)'},
-  '000000000007ab27':{1:'G2-F sampled read calls',3:'G2-F page reuse',6:'G2-F watcher checks',9:'G2-F direct small reads',11:'G2-F direct large reads',13:'G2-F watched fallback',14:'G2-F cross-page fallback'},
-  '000000000007ab28':{1:'G2-F sampled evaluations',4:'G2-F mapping probes',5:'G2-F mapping hits',6:'G2-F mapping misses',10:'G2-F prefetch lines',11:'G2-F adjacent duplicate prefetches'},
-  '000000000007ab29':{1:'G2-H packed dependency levels',2:'G2-H eligible unbounded levels',3:'G2-H packed runs',4:'G2-H eligible unbounded runs',5:'G2-H specialized levels',6:'G2-H specialized runs'},
-  '000000000007ab2a':{1:'G2-I sampled TableBlocks calls',2:'G2-I completed TableBlocks calls',3:'G2-I stages',4:'G2-I buffer descriptors',5:'G2-I writable descriptors',6:'G2-I writable ObtainBuffer calls',7:'G2-I read-only descriptors',8:'G2-I reused read-only buffers',9:'G2-I read-only resolves',10:'G2-I final uploads',11:'G2-I uploaded bytes',12:'G2-I empty stages'},
-  '000000000007ab2b':{1:'G2-I sampled writable ObtainBuffer (cycles)',2:'G2-I sampled final block upload (cycles)' },
   '000000000007ab20':{1:'TableEvaluate',2:'TableGather'},
   '000000000007ab21':{1:'TablePrepareBda (global)',2:'TableBlocks inclusive',3:'Dispatch indirect args'},
   '000000000007ab22':{1:'CPU-dirty ring candidate',2:'Fallback ObtainBuffer'},
@@ -93,113 +83,6 @@ function draw(s){
     list.append(li);
    }
    censusBox.append(list);
-  }
-  const diagnostics=lastCensus.focusEntries?.filter(e=>e.kind===12&&
-    (e.a==='000000000007ab27'||e.a==='000000000007ab28'))||[];
-  if(diagnostics.length){
-   const head=document.createElement('strong');head.textContent='G2-F sampled read / mapping paths (1-in-32 evaluations)';
-   censusBox.append(head);
-   const list=document.createElement('ol');list.className='benchmark-census-list';
-   for(const asyncQueue of [false,true]){
-    const select=(namespace,id)=>{
-     const target='000000000007ab'+namespace;
-     const entry=diagnostics.find(e=>e.a===target&&e.b.startsWith(asyncQueue?'8':'0')&&
-       parseInt(e.b.slice(-2),16)===id);
-     return entry?.calls_per_frame??0;
-    };
-    const sample=select('28',1);
-    if(!sample)continue;
-    const reads=select('27',1),map=select('28',4),hits=select('28',5);
-    const issued=select('28',10),duplicates=select('28',11),suppressed=select('28',12);
-    const small=select('27',9),large=select('27',11);
-    const watched=select('27',13),cross=select('27',14);
-    const watcherChecks=select('27',6);
-    const li=document.createElement('li');
-    li.textContent=(asyncQueue?'Async':'Graphics')+': sampled '+metric(sample,1)+' eval/frame; '+
-      'reads '+metric(reads/sample,2)+'/eval ('+metric(100*small/Math.max(1,reads),1)+'% short direct, '+
-      metric(100*large/Math.max(1,reads),1)+'% large direct, '+
-      metric(100*watched/Math.max(1,reads),2)+'% watched, '+
-      metric(100*cross/Math.max(1,reads),2)+'% cross-page); '+
-      'mapping hits '+metric(100*hits/Math.max(1,map),1)+'%, '+
-      'watcher checks '+metric(watcherChecks/sample,2)+'/eval; '+
-      'adjacent prefetch repeats '+metric(100*duplicates/Math.max(1,issued),1)+'%, ' +
-      'G2-G suppressed '+metric(suppressed,1)+' sampled lines/frame ('+
-      metric(100*suppressed/Math.max(1,issued+suppressed),1)+'% of attempts).';
-    list.append(li);
-   }
-   censusBox.append(list);
-   const note=document.createElement('p');note.className='benchmark-census-note';
-   note.textContent='G2-F entries are sampled event counts per native frame, NOT measured ms. Percents use only sampled evaluations; no FPS gain is implied.';
-   censusBox.append(note);
-  }
-  const g2h=lastCensus.focusEntries?.filter(e=>e.kind===12 && e.a==='000000000007ab29')||[];
-  if(g2h.length){
-   const head=document.createElement('strong');head.textContent='G2-H packed unbounded-level opportunity (sampled 1-in-32)';
-   censusBox.append(head);
-   const list=document.createElement('ol');list.className='benchmark-census-list';
-   for(const [label,prefix] of [['Graphics','0'],['Async','8']]){
-    const val=id=>g2h.find(e=>e.b.startsWith(prefix)&&parseInt(e.b.slice(-2),16)===id)?.calls_per_frame||0;
-    const levels=val(1),eligible=val(2),runs=val(3),eligibleRuns=val(4),specialized=val(5);
-    if(!levels)continue;
-    const li=document.createElement('li');
-    li.textContent=label+': eligible '+metric(100*eligible/levels,1)+'% of '+metric(levels,1)+
-      ' sampled levels/frame; '+metric(100*eligibleRuns/Math.max(runs,1),1)+'% of '+
-      metric(runs,1)+' runs; specialized '+metric(specialized,1)+' levels/frame.';
-    list.append(li);
-   }
-   censusBox.append(list);
-   const note=document.createElement('p');note.className='benchmark-census-note';
-   note.textContent='G2-H values are sampled event counts (not ms or FPS improvement). Bounded or invalid plans remain unchanged.';
-   censusBox.append(note);
-  }
-  const g2i=lastCensus.focusEntries?.filter(e=>e.kind===12&&
-    (e.a==='000000000007ab2a'||e.a==='000000000007ab2b'))||[];
-  if(g2i.length){
-   const head=document.createElement('strong');head.textContent='G2-I TableBlocks sampled breakdown (1-in-64 calls)';
-   censusBox.append(head);
-   const list=document.createElement('ol');list.className='benchmark-census-list';
-   for(const [queue,prefix] of [['Graphics','0'],['Async','8']]){
-    const metricAt=(namespace,id)=>{
-     const e=g2i.find(x=>x.a==='000000000007ab2'+namespace&&x.b.startsWith(prefix)&&parseInt(x.b.slice(-2),16)===id);
-     return e||null;
-    };
-    const count=id=>metricAt('a',id)?.calls_per_frame||0;
-    const calls=count(1);
-    if(!calls)continue;
-    const stages=count(3),descriptors=count(4),readOnly=count(7),writable=count(5);
-    const uploads=count(10),bytes=count(11),acquires=count(6);
-    const tUpload=metricAt('b',2)?.ms_per_frame||0;
-    const tAcquire=metricAt('b',1)?.ms_per_frame||0;
-    const li=document.createElement('li');
-    li.textContent=queue+': '+metric(calls,2)+' sampled blocks/frame; '+
-     metric(descriptors/Math.max(calls,1),1)+' descriptors/call ('+
-     metric(100*writable/Math.max(descriptors,1),1)+'% writable); '+
-     metric(100*count(8)/Math.max(readOnly,1),1)+'% read-only reused; '+
-     metric(uploads/Math.max(calls,1),2)+' uploads/call ('+
-     metric(bytes/Math.max(uploads,1),0)+' bytes/upload), '+
-     metric(acquires/Math.max(calls,1),3)+' writable obtains/call; '+
-     'sampled acquisition '+metric(tAcquire,4)+' ms/frame, uploads '+
-     metric(tUpload,4)+' ms/frame.';
-    list.append(li);
-   }
-   censusBox.append(list);
-   const note=document.createElement('p');note.className='benchmark-census-note';
-   note.textContent='G2-I times cover ONLY 1-in-64 sampled TableBlocks calls; do not compare directly to inclusive TableBlocks ms/frame. CPU Census perturbs timing. This is diagnostic, not an FPS gain.';
-   censusBox.append(note);
-  }
-  const candidates=lastCensus.focusEntries?.filter(e=>e.a==='000000000007ab24')||[];
-  if(candidates.length){
-   let eligibleStages=0,eligibleIterations=0,skippedIterations=0;
-   for(const e of candidates){
-    const words=(parseInt(e.b.slice(-4),16)>>8)&255;
-    const skipped=(parseInt(e.b.slice(-2),16)&1)!==0;
-    eligibleStages+=e.calls_per_frame;
-    eligibleIterations+=words*e.calls_per_frame;
-    if(skipped)skippedIterations+=words*e.calls_per_frame;
-   }
-   const p=document.createElement('p');p.className='benchmark-census-note';
-   p.textContent='G2-D read-only stage calls: '+metric(eligibleStages,1)+'/frame; write checks eligible: '+metric(eligibleIterations,1)+'/frame; skipped: '+metric(skippedIterations,1)+'/frame.';
-   censusBox.append(p);
   }
   const note=document.createElement('p');note.className='benchmark-census-note';
   note.textContent='Inclusive CPU wall timings; nested scopes overlap. See census-*.json for all shader/phase keys.';
