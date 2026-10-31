@@ -39,6 +39,6 @@ Source: `chenxiao07/KytyPS5` `experiment/perf-40fps-20260926` HEAD `7de6fd9e` (2
 
 ## Private/local files excluded from cleanup
 
-Never automatically delete ignored `_Build/`, `_SaveData/`, `_SaveData.rar`, `_Mods/`, `_PipelineCache/`, shader cache, `launcher-settings.json`, `game-path.txt`, proprietary game files, user's nontracked documents or backups. Deleting even an old experimental build folder may destroy logs or a launch path; check ownership/runtime state first.
+Never indiscriminately delete ignored `_Build/`, `_SaveData/`, `_SaveData.rar`, `_Mods/`, `_PipelineCache/`, shader cache, `launcher-settings.json`, `game-path.txt`, proprietary game files, user's nontracked documents or backups. The single **audited exception** on 2026-10-31 was obsolete `_Build/g3b-staging/`: 73 files / 357.42 MiB moved to Recycle Bin by `tools/local/windows/cleanup-obsolete-artifacts.ps1 -Execute` after canonical output and process checks. It was not a game launch target; all other build/user folders remained protected.
 
-**Status:** tracked runtime trial removal is complete and built/tested offline. No runtime/gameplay FPS result yet. Generated `_Build/` archival directories remain protected until explicit ownership/process checks and supported Windows deletion path. Separate upstream merge remains gated by conflict resolution and native validation.
+**Status:** tracked runtime trial removal is complete and built/tested offline; one confirmed obsolete staging directory has also been recycled. No runtime/gameplay FPS result yet. Other generated `_Build/` archives and backups remain protected; upstream full merge remains gated by conflict resolution and native validation.

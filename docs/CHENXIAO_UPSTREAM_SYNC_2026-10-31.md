@@ -36,7 +36,7 @@ These two commits are isolated, retain chenxiao as the Git author and are *not* 
 
 ## Generated output / deletion decision
 
-Only tracked ineffective experiment source, switches, policy files and Launcher tests were removed in `c82c9506`. Existing ignored user/build assets under `_Build/` are preserved. Obsolete `_Build/g3b-staging` (~0.35 GiB) is not in any active launcher path but has previous instructions to avoid deleting without ownership/process review; don't delete by `git clean` or unbounded recursive shell cleanup. Game folders, `_SaveData`, shader cache, hints, private untracked scripts and mod data are absolutely protected.
+Tracked ineffective experiment source, switches, policy files and Launcher tests were removed in `c82c9506`. On **2026-10-31**, at the user's explicit cleanup request, the allowlisted **`_Build/g3b-staging/`** was verified as a non-reparse 73-file historical Launcher copy with no active processes, then **moved to the Windows Recycle Bin** using `tools/local/windows/cleanup-obsolete-artifacts.ps1 -Execute` (**357.42 MiB**). A post-action check confirmed staging absent and the canonical native/Launcher executables, shader inputs and scene benchmark present. The helper is dry-run by default and idempotent. All other ignored user/build assets, original game, `_SaveData`, mod and shader caches, logs, hints, backups and personal files were preserved. Never use a blanket `git clean` or recursive deletion of `_Build`.
 
 ## Next real-world acceptance
 
